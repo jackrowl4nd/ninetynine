@@ -1,18 +1,21 @@
 // src/App.jsx — Routing shell only
-// All logic lives in Site.jsx, Dashboard.jsx, shared.js, and supabase.js
 
 import React, { useState } from "react";
 import "./App.css";
 import { IS_DEMO } from "./supabase.js";
-import Site, { CancelPage } from "./Site.jsx";
+import Site, { CancelPage, ClientPortal } from "./Site.jsx";
 import Dashboard from "./Dashboard.jsx";
 
 export default function App() {
   const [page, setPage] = useState("site");
-  const cancelToken = new URLSearchParams(window.location.search).get("token");
-  const isCancelPage = window.location.pathname === "/cancel" && cancelToken;
+  const params = new URLSearchParams(window.location.search);
+  const cancelToken = params.get("token");
+  const portalEmail = params.get("email");
+  const portalToken = params.get("t");
+  const path = window.location.pathname;
 
-  if (isCancelPage) return <CancelPage token={cancelToken} />;
+  if (path === "/cancel" && cancelToken) return <CancelPage token={cancelToken} />;
+  if (path === "/my-bookings" && portalEmail && portalToken) return <ClientPortal email={portalEmail} token={portalToken} />;
 
   if (page === "dashboard") {
     return (
