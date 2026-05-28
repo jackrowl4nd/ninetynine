@@ -13,7 +13,7 @@ export const DEMO_PRACTITIONERS = [
   { id: "2", name: "Inke", role: "Manicurist & Lash Lift Technician", specialty: "Nails & Lashes", color: "#B8A08A", photo: "/team/Inke.jpg", instagram: "@byinke_x" },
   { id: "3", name: "Holly", role: "Gel Toes & Toenail Reconstruction", specialty: "Gel Toes", color: "#C4A882", photo: "/team/Holly.jpg", instagram: "@painted__byholly" },
   { id: "4", name: "Kristen", role: "Salon Owner & Manicurist", specialty: "Gel & Nail Art", color: "#A89080", photo: "/team/Kristen.jpg", instagram: "@nailsbykristen_x" },
-  { id: "5", name: "Melissa", role: Manicurist", specialty: "Nail Art", color: "#BCA68E", photo: null, instagram: null },
+  { id: "5", name: "Melissa", role: "Nail Technician", specialty: "Nail Art", color: "#BCA68E", photo: null, instagram: null },
 ];
 
 export const DEMO_SERVICES_LIST = [
