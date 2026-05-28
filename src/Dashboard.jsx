@@ -457,7 +457,19 @@ function WeekView({ bookings, loading, onAddBooking, onStatusChange }) {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20, flexWrap: "wrap", gap: 12 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <button className="nn-cal-btn" onClick={() => setWeekStart(d => addDays(d, -7))}>‹</button>
-          <span style={{ fontFamily: "'Cormorant Garamond',serif", fontSize: 20, fontWeight: 400, minWidth: 160, textAlign: "center" }}>{weekLabel}</span>
+          <span
+  style={{ fontFamily: "'Cormorant Garamond',serif", fontSize: 20, fontWeight: 400, minWidth: 160, textAlign: "center", cursor: "pointer", position: "relative" }}
+  onClick={() => document.getElementById("nn-week-picker").click()}
+  title="Jump to date"
+>
+  {weekLabel}
+  <input
+    id="nn-week-picker"
+    type="date"
+    style={{ position: "absolute", opacity: 0, pointerEvents: "none", width: 0, height: 0, top: 0, left: 0 }}
+    onChange={e => { if (e.target.value) setWeekStart(getWeekStart(new Date(e.target.value + "T12:00:00"))); }}
+  />
+</span>
           <button className="nn-cal-btn" onClick={() => setWeekStart(d => addDays(d, 7))}>›</button>
           <button onClick={() => setWeekStart(getWeekStart(new Date()))}
             style={{ marginLeft: 8, padding: "6px 14px", background: "none", border: "1px solid var(--border)", cursor: "pointer", fontFamily: "'Outfit',sans-serif", fontSize: 11, fontWeight: 500, letterSpacing: "1px", textTransform: "uppercase", color: "var(--warm-gray)" }}>
@@ -476,7 +488,7 @@ function WeekView({ bookings, loading, onAddBooking, onStatusChange }) {
           <div style={{ minWidth: 560, userSelect: "none" }}>
 
             {/* Day header row */}
-            <div style={{ display: "grid", gridTemplateColumns: "48px repeat(7, 1fr)", borderBottom: "1px solid var(--border)" }}>
+<div style={{ display: "grid", gridTemplateColumns: "48px repeat(7, 1fr)", borderBottom: "1px solid var(--border)", position: "sticky", top: 0, zIndex: 10 }}>
               <div style={{ background: "var(--charcoal)" }} />
               {days.map((d, i) => {
                 const isToday = d.getTime() === today.getTime();
@@ -499,7 +511,7 @@ function WeekView({ bookings, loading, onAddBooking, onStatusChange }) {
             <div style={{ display: "grid", gridTemplateColumns: "48px repeat(7, 1fr)", position: "relative" }}>
 
               {/* Time labels column */}
-              <div style={{ position: "relative", height: TOTAL_SLOTS * SLOT_H }}>
+<div style={{ position: "sticky", left: 0, zIndex: 5, background: "var(--cream)", height: TOTAL_SLOTS * SLOT_H }}>
                 {timeLabels.map(({ label, top }) => (
                   <div key={label} style={{
                     position: "absolute",
