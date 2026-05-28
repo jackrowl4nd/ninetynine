@@ -618,7 +618,7 @@ function WeekView({ bookings, loading, prac, token, onAddBooking, onStatusChange
                     style={{ flex: 1, padding: "14px", background: "var(--charcoal)", color: "var(--cream)", border: "none", cursor: "pointer", fontFamily: "'Outfit',sans-serif", fontSize: 12, fontWeight: 500, letterSpacing: "1.5px", textTransform: "uppercase" }}>
                     Edit
                   </button>
-                  <button onClick={() => { onStatusChange(sheet.id, "cancelled"); closeSheet(); }}
+                  <button onClick={() => { if (window.confirm("Are you sure you want to cancel this booking for " + sheet.client_name + "?")) { onStatusChange(sheet.id, "cancelled"); closeSheet(); } }}
                     style={{ flex: 1, padding: "14px", background: "none", color: "var(--red)", border: "1px solid var(--red)", cursor: "pointer", fontFamily: "'Outfit',sans-serif", fontSize: 12, fontWeight: 500, letterSpacing: "1.5px", textTransform: "uppercase" }}>
                     Cancel
                   </button>
