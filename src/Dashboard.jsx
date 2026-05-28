@@ -1,6 +1,7 @@
 // src/Dashboard.jsx — Staff-facing portal
+// Login, Bookings (week view calendar), My Services, My Schedule
 
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect } from "react";
 import { supabase, SUPABASE_URL, IS_DEMO } from "./supabase.js";
 import {
   DEMO_PRACTITIONERS, DEMO_SERVICES_LIST,
@@ -9,7 +10,7 @@ import {
 } from "./shared.jsx";
 
 // ============================================================
-// SERVICE FORM
+// SERVICE FORM (add/edit a custom service)
 // ============================================================
 
 function ServiceForm({ practitionerId, token, existingService, existingGroups, onSave, onCancel }) {
@@ -190,11 +191,10 @@ function StaffBookingForm({ prac, services, token, onDone, onCancel }) {
     setSaving(true);
     try {
       if (IS_DEMO) { setDone(true); setSaving(false); return; }
-      const serviceTitle = svc.title + (addon ? " + " + addon.title : "");
       await supabase.insert("bookings", {
         practitioner_id: prac.id,
         service_id: svc.id,
-        service_title: serviceTitle,
+        service_title: svc.title + (addon ? " + " + addon.title : ""),
         client_name: clientName,
         client_phone: phone,
         client_email: email,
@@ -288,7 +288,7 @@ function StaffBookingForm({ prac, services, token, onDone, onCancel }) {
                 <h3>{getMonthName(cM)} {cY}</h3>
                 <button className="nn-cal-btn" onClick={() => { if (cM === 11) { setCM(0); setCY(cY + 1); } else setCM(cM + 1); }}>›</button>
               </div>
-              <div className="nn-cal-weekdays">{["Mon","Tue","Wed","Thu","Fri","Sat","Sun"].map(d => <span key={d}>{d}</span>)}</div>
+              <div className="nn-cal-weekdays">{["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map(d => <span key={d}>{d}</span>)}</div>
               <div className="nn-cal-days">
                 {(() => {
                   const first = (new Date(cY, cM, 1).getDay() + 6) % 7;
@@ -333,17 +333,22 @@ function StaffBookingForm({ prac, services, token, onDone, onCancel }) {
         <div>
           <H3>Client details</H3>
           <div style={{ background: "var(--cream)", border: "1px solid var(--border)", padding: 32, marginBottom: 24 }}>
-            {[
-              ["Service", svc?.title + (addon ? " + " + addon.title : "")],
-              ["Date & Time", getDayName(date.year, date.month, date.day) + " " + date.day + " " + getMonthName(date.month) + " at " + time],
-              ["Duration", totalDuration + " min"],
-              ["Price", "£" + totalPrice],
-            ].map(([label, val], i, arr) => (
-              <div key={label} style={{ display: "flex", justifyContent: "space-between", padding: "10px 0", borderBottom: i < arr.length - 1 ? "1px solid var(--border)" : "none", fontSize: 14 }}>
-                <span style={{ color: "var(--warm-gray)", fontWeight: 300 }}>{label}</span>
-                <span style={{ fontWeight: label === "Price" ? 600 : 500, color: label === "Price" ? "var(--gold)" : "inherit" }}>{val}</span>
-              </div>
-            ))}
+            <div style={{ display: "flex", justifyContent: "space-between", padding: "10px 0", borderBottom: "1px solid var(--border)", fontSize: 14 }}>
+              <span style={{ color: "var(--warm-gray)", fontWeight: 300 }}>Service</span>
+              <span style={{ fontWeight: 500 }}>{svc?.title}{addon ? " + " + addon.title : ""}</span>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", padding: "10px 0", borderBottom: "1px solid var(--border)", fontSize: 14 }}>
+              <span style={{ color: "var(--warm-gray)", fontWeight: 300 }}>Date &amp; Time</span>
+              <span style={{ fontWeight: 500 }}>{getDayName(date.year, date.month, date.day)} {date.day} {getMonthName(date.month)} at {time}</span>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", padding: "10px 0", borderBottom: "1px solid var(--border)", fontSize: 14 }}>
+              <span style={{ color: "var(--warm-gray)", fontWeight: 300 }}>Duration</span>
+              <span style={{ fontWeight: 500 }}>{totalDuration} min</span>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", padding: "10px 0", fontSize: 14 }}>
+              <span style={{ color: "var(--warm-gray)", fontWeight: 300 }}>Price</span>
+              <span style={{ fontWeight: 600, color: "var(--gold)" }}>£{totalPrice}</span>
+            </div>
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
             <div><label className="nn-input-label">Client Name</label><input className="nn-input" type="text" value={clientName} onChange={e => setClientName(e.target.value)} placeholder="Full name" /></div>
@@ -363,402 +368,312 @@ function StaffBookingForm({ prac, services, token, onDone, onCancel }) {
   );
 }
 
-// Everything else in Dashboard.jsx stays identical.
+// ============================================================
+// WEEK VIEW CALENDAR
+// ============================================================
 
-function BookingModal({ booking, prac, token, onClose, onUpdated }) {
-  const [view, setView] = useState("detail"); // "detail" | "edit" | "confirm_cancel"
-  const [editDate, setEditDate] = useState(null);
-  const [editTime, setEditTime] = useState(null);
-  const [saving, setSaving] = useState(false);
-  const now = new Date();
-  const [cM, setCM] = useState(now.getMonth());
-  const [cY, setCY] = useState(now.getFullYear());
+const HOUR_START = 7;
+const HOUR_END = 22;
+const SLOT_H = 32; // px per 30-min slot
+const TOTAL_SLOTS = (HOUR_END - HOUR_START) * 2;
 
-  const treatmentName = booking.service_title || booking.service_name || "Service";
-  const dateStr2 = booking.booking_date
-    ? new Date(booking.booking_date + "T12:00:00").toLocaleDateString("en-GB", {
-        weekday: "long", day: "numeric", month: "long",
-      })
-    : "";
-
-  const { slots, loading: slotsLoading } = useAvailableSlots(
-    prac?.id, editDate, booking.duration, prac?.slot_interval || 30
-  );
-
-  async function handleReschedule() {
-    if (!editDate || !editTime) return;
-    setSaving(true);
-    try {
-      if (!IS_DEMO) {
-        await supabase.update("bookings", {
-          booking_date: dateStr(editDate.year, editDate.month, editDate.day),
-          booking_time: editTime + ":00",
-        }, "id=eq." + booking.id, token);
-      }
-      onUpdated(booking.id, "rescheduled", {
-        booking_date: dateStr(editDate.year, editDate.month, editDate.day),
-        booking_time: editTime + ":00",
-      });
-      onClose();
-    } catch (e) { console.error(e); setSaving(false); }
-  }
-
-  async function handleCancel() {
-    setSaving(true);
-    try {
-      if (!IS_DEMO) {
-        await supabase.update("bookings", { status: "cancelled" }, "id=eq." + booking.id, token);
-      }
-      onUpdated(booking.id, "cancelled");
-      onClose();
-    } catch (e) { console.error(e); setSaving(false); }
-  }
-
-  return (
-    <div
-      style={{ position: "fixed", inset: 0, zIndex: 300, background: "rgba(44,40,37,.45)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}
-      onClick={onClose}
-    >
-      <div
-        style={{ background: "var(--cream)", border: "1px solid var(--border)", padding: "28px 24px", maxWidth: 460, width: "100%", position: "relative", maxHeight: "90vh", overflowY: "auto" }}
-        onClick={e => e.stopPropagation()}
-      >
-        <button onClick={onClose} style={{ position: "absolute", top: 16, right: 16, background: "none", border: "none", cursor: "pointer", fontSize: 18, color: "var(--warm-gray)" }}>✕</button>
-
-        {/* ── DETAIL VIEW ── */}
-        {view === "detail" && (
-          <>
-            <div style={{ fontFamily: "'Cormorant Garamond',serif", fontSize: 22, fontWeight: 400, marginBottom: 20 }}>Booking details</div>
-            {[
-              ["Client", booking.client_name],
-              ["Treatment", treatmentName],
-              ["Date", dateStr2],
-              ["Time", booking.booking_time?.slice(0, 5)],
-              ["Duration", booking.duration + " min"],
-              ["Price", "£" + booking.price],
-              ["Phone", booking.client_phone],
-              booking.client_email && ["Email", booking.client_email],
-              booking.notes && ["Notes", booking.notes],
-            ].filter(Boolean).map(([label, val]) => (
-              <div key={label} style={{ display: "flex", justifyContent: "space-between", padding: "9px 0", borderBottom: "1px solid var(--border)", fontSize: 13 }}>
-                <span style={{ color: "var(--warm-gray)", fontWeight: 300 }}>{label}</span>
-                <span style={{ fontWeight: 500, textAlign: "right", maxWidth: "60%" }}>{val}</span>
-              </div>
-            ))}
-            <div style={{ display: "flex", gap: 10, marginTop: 24 }}>
-              <button
-                onClick={() => setView("edit")}
-                style={{ flex: 1, padding: "12px", background: "var(--charcoal)", color: "var(--cream)", border: "none", cursor: "pointer", fontFamily: "'Outfit',sans-serif", fontSize: 11, fontWeight: 600, letterSpacing: 1, textTransform: "uppercase" }}>
-                Edit
-              </button>
-              <button
-                onClick={() => setView("confirm_cancel")}
-                style={{ flex: 1, padding: "12px", background: "none", color: "var(--red)", border: "1.5px solid var(--red)", cursor: "pointer", fontFamily: "'Outfit',sans-serif", fontSize: 11, fontWeight: 600, letterSpacing: 1, textTransform: "uppercase" }}>
-                Cancel
-              </button>
-            </div>
-          </>
-        )}
-
-        {/* ── EDIT VIEW — reschedule date/time ── */}
-        {view === "edit" && (
-          <>
-            <button onClick={() => setView("detail")} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 12, color: "var(--warm-gray)", fontFamily: "'Outfit',sans-serif", letterSpacing: 1, textTransform: "uppercase", marginBottom: 16, padding: 0 }}>← Back</button>
-            <div style={{ fontFamily: "'Cormorant Garamond',serif", fontSize: 22, fontWeight: 400, marginBottom: 6 }}>Reschedule</div>
-            <div style={{ fontSize: 13, color: "var(--warm-gray)", fontWeight: 300, marginBottom: 20 }}>{booking.client_name} · {treatmentName}</div>
-
-            {/* Calendar */}
-            <div className="nn-cal" style={{ maxWidth: "100%", marginBottom: 20 }}>
-              <div className="nn-cal-head">
-                <button className="nn-cal-btn" onClick={() => { if (cM === 0) { setCM(11); setCY(cY - 1); } else setCM(cM - 1); }}>‹</button>
-                <h3>{getMonthName(cM)} {cY}</h3>
-                <button className="nn-cal-btn" onClick={() => { if (cM === 11) { setCM(0); setCY(cY + 1); } else setCM(cM + 1); }}>›</button>
-              </div>
-              <div className="nn-cal-weekdays">{["Mon","Tue","Wed","Thu","Fri","Sat","Sun"].map(d => <span key={d}>{d}</span>)}</div>
-              <div className="nn-cal-days">
-                {(() => {
-                  const first = (new Date(cY, cM, 1).getDay() + 6) % 7;
-                  const total = getDaysInMonth(cY, cM);
-                  const cells = [];
-                  for (let i = 0; i < first; i++) cells.push(<div className="nn-cal-day nil" key={"e" + i} />);
-                  for (let d = 1; d <= total; d++) {
-                    const isNow = d === now.getDate() && cM === now.getMonth() && cY === now.getFullYear();
-                    const past = new Date(cY, cM, d) < new Date(now.getFullYear(), now.getMonth(), now.getDate());
-                    const sun = new Date(cY, cM, d).getDay() === 0;
-                    const sel = editDate && editDate.day === d && editDate.month === cM && editDate.year === cY;
-                    cells.push(
-                      <button key={d}
-                        className={"nn-cal-day" + (sel ? " on" : "") + (past || sun ? " off" : "") + (isNow ? " now" : "")}
-                        onClick={() => { if (!past && !sun) { setEditDate({ day: d, month: cM, year: cY }); setEditTime(null); } }}
-                        disabled={past || sun}>{d}</button>
-                    );
-                  }
-                  return cells;
-                })()}
-              </div>
-            </div>
-
-            {/* Time slots */}
-            {editDate && (
-              <div style={{ marginBottom: 20 }}>
-                <div style={{ fontSize: 12, color: "var(--warm-gray)", marginBottom: 10, fontWeight: 300 }}>
-                  {getDayName(editDate.year, editDate.month, editDate.day)} {editDate.day} {getMonthName(editDate.month)}
-                </div>
-                {slotsLoading ? (
-                  <div style={{ color: "var(--warm-gray)", fontSize: 13, fontWeight: 300 }}>Loading available times...</div>
-                ) : slots.length === 0 ? (
-                  <div style={{ color: "var(--red)", fontSize: 13, fontWeight: 300 }}>No available slots on this day.</div>
-                ) : (
-                  <div className="nn-times">
-                    {slots.map(t => (
-                      <button key={t} className={"nn-time" + (editTime === t ? " on" : "")} onClick={() => setEditTime(t)}>{t}</button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-
-            <div style={{ display: "flex", gap: 10, marginTop: 8 }}>
-              <button onClick={() => setView("detail")} className="nn-btn-back" style={{ flex: 1 }}>Cancel</button>
-              <button
-                onClick={handleReschedule}
-                disabled={!editDate || !editTime || saving}
-                style={{ flex: 2, padding: "12px", background: "var(--charcoal)", color: "var(--cream)", border: "none", cursor: "pointer", fontFamily: "'Outfit',sans-serif", fontSize: 11, fontWeight: 600, letterSpacing: 1, textTransform: "uppercase", opacity: editDate && editTime && !saving ? 1 : .35 }}>
-                {saving ? "Saving..." : "Confirm New Time"}
-              </button>
-            </div>
-          </>
-        )}
-
-        {/* ── CANCEL CONFIRMATION ── */}
-        {view === "confirm_cancel" && (
-          <>
-            <div style={{ fontFamily: "'Cormorant Garamond',serif", fontSize: 22, fontWeight: 400, marginBottom: 12 }}>Cancel booking?</div>
-            <p style={{ fontSize: 14, color: "var(--warm-gray)", fontWeight: 300, lineHeight: 1.65, marginBottom: 24 }}>
-              This will cancel {booking.client_name}'s {treatmentName} on {dateStr2}.
-            </p>
-            <div style={{ display: "flex", gap: 10 }}>
-              <button onClick={() => setView("detail")} className="nn-btn-back" style={{ flex: 1 }}>Go back</button>
-              <button
-                onClick={handleCancel}
-                disabled={saving}
-                style={{ flex: 1, padding: "12px", background: "var(--red)", color: "#fff", border: "none", cursor: "pointer", fontFamily: "'Outfit',sans-serif", fontSize: 11, fontWeight: 600, letterSpacing: 1, textTransform: "uppercase" }}>
-                {saving ? "Cancelling..." : "Yes, Cancel"}
-              </button>
-            </div>
-          </>
-        )}
-      </div>
-    </div>
-  );
+function getWeekStart(date) {
+  const d = new Date(date);
+  const day = d.getDay();
+  const diff = day === 0 ? -6 : 1 - day;
+  d.setDate(d.getDate() + diff);
+  d.setHours(0, 0, 0, 0);
+  return d;
 }
 
-// ============================================================
-// BOOKINGS TAB — new design: month calendar + day detail
-// ============================================================
+function addDays(date, n) {
+  const d = new Date(date);
+  d.setDate(d.getDate() + n);
+  return d;
+}
 
-function BookingsTab({ prac, auth, bookings, loading, dashMonth, dashYear, setDashMonth, setDashYear, onAddBooking, onBookingUpdated }) {
-  const [selectedDay, setSelectedDay] = useState(null);
-  const [modalBooking, setModalBooking] = useState(null);
-  const today = new Date();
+function toDateStr(date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
 
-  // Bookings for selected day, sorted by time
-  const dayBookings = selectedDay
-    ? bookings.filter(b => b.booking_date === dateStr(selectedDay.year, selectedDay.month, selectedDay.day))
-        .sort((a, b) => (a.booking_time || "").localeCompare(b.booking_time || ""))
-    : [];
+function fmtShortDate(date) {
+  return date.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+}
 
-  // Auto-select today if in current month
+function WeekView({ bookings, loading, onAddBooking, onStatusChange }) {
+  const [weekStart, setWeekStart] = useState(() => getWeekStart(new Date()));
+  const [sheet, setSheet] = useState(null);
+  const [nowTop, setNowTop] = useState(null);
+  const [nowDayIdx, setNowDayIdx] = useState(null);
+
   useEffect(() => {
-    if (dashMonth === today.getMonth() && dashYear === today.getFullYear()) {
-      setSelectedDay({ day: today.getDate(), month: today.getMonth(), year: today.getFullYear() });
-    } else {
-      setSelectedDay(null);
+    function calcNow() {
+      const now = new Date();
+      const mins = now.getHours() * 60 + now.getMinutes();
+      const startMins = HOUR_START * 60;
+      const endMins = HOUR_END * 60;
+      if (mins < startMins || mins > endMins) { setNowTop(null); return; }
+      setNowTop(((mins - startMins) / 30) * SLOT_H);
+      const day = now.getDay();
+      setNowDayIdx(day === 0 ? 6 : day - 1);
     }
-  }, [dashMonth, dashYear]);
+    calcNow();
+    const t = setInterval(calcNow, 60000);
+    return () => clearInterval(t);
+  }, []);
 
-  function prevMonth() {
-    if (dashMonth === 0) { setDashMonth(11); setDashYear(dashYear - 1); }
-    else setDashMonth(dashMonth - 1);
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const days = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
+
+  const weekEnd = addDays(weekStart, 6);
+  const weekLabel = `${fmtShortDate(weekStart)} – ${fmtShortDate(weekEnd)}`;
+
+  const DAY_NAMES_SHORT = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"];
+
+  // Group bookings by date
+  const bookingsByDate = {};
+  bookings.forEach(b => {
+    if (!bookingsByDate[b.booking_date]) bookingsByDate[b.booking_date] = [];
+    bookingsByDate[b.booking_date].push(b);
+  });
+
+  function bookingStyle(b) {
+    const [h, m] = b.booking_time.split(":").map(Number);
+    const offsetMins = h * 60 + m - HOUR_START * 60;
+    const top = (offsetMins / 30) * SLOT_H;
+    const height = Math.max((b.duration / 30) * SLOT_H - 2, 22);
+    return { top, height };
   }
-  function nextMonth() {
-    if (dashMonth === 11) { setDashMonth(0); setDashYear(dashYear + 1); }
-    else setDashMonth(dashMonth + 1);
+
+  // Time labels on left — one per hour
+  const timeLabels = [];
+  for (let h = HOUR_START; h <= HOUR_END; h++) {
+    timeLabels.push({ label: `${h}:00`, top: ((h - HOUR_START) * 2) * SLOT_H });
   }
 
   return (
     <div>
-      {/* Header row */}
+      {/* Top bar */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20, flexWrap: "wrap", gap: 12 }}>
-        <button onClick={onAddBooking} style={{ display: "flex", alignItems: "center", gap: 8, padding: "11px 22px", background: "var(--charcoal)", color: "var(--cream)", border: "none", cursor: "pointer", fontFamily: "'Outfit',sans-serif", fontSize: 11, fontWeight: 500, letterSpacing: "1.5px", textTransform: "uppercase" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <button className="nn-cal-btn" onClick={() => setWeekStart(d => addDays(d, -7))}>‹</button>
+          <span style={{ fontFamily: "'Cormorant Garamond',serif", fontSize: 20, fontWeight: 400, minWidth: 160, textAlign: "center" }}>{weekLabel}</span>
+          <button className="nn-cal-btn" onClick={() => setWeekStart(d => addDays(d, 7))}>›</button>
+          <button onClick={() => setWeekStart(getWeekStart(new Date()))}
+            style={{ marginLeft: 8, padding: "6px 14px", background: "none", border: "1px solid var(--border)", cursor: "pointer", fontFamily: "'Outfit',sans-serif", fontSize: 11, fontWeight: 500, letterSpacing: "1px", textTransform: "uppercase", color: "var(--warm-gray)" }}>
+            Today
+          </button>
+        </div>
+        <button onClick={onAddBooking} style={{ display: "flex", alignItems: "center", gap: 8, padding: "12px 24px", background: "var(--charcoal)", color: "var(--cream)", border: "none", cursor: "pointer", fontFamily: "'Outfit',sans-serif", fontSize: 12, fontWeight: 500, letterSpacing: "1.5px", textTransform: "uppercase", flexShrink: 0 }}>
           <span style={{ fontSize: 16, lineHeight: 1 }}>+</span> Add Booking
         </button>
       </div>
 
-      {/* Month navigator */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-        <button className="nn-cal-btn" onClick={prevMonth}>‹</button>
-        <div style={{ fontFamily: "'Cormorant Garamond',serif", fontSize: 20, fontWeight: 400 }}>{getMonthName(dashMonth)} {dashYear}</div>
-        <button className="nn-cal-btn" onClick={nextMonth}>›</button>
-      </div>
+      {loading ? (
+        <div style={{ color: "var(--warm-gray)", padding: 40, textAlign: "center" }}>Loading bookings...</div>
+      ) : (
+        <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch", border: "1px solid var(--border)", borderRadius: 2 }}>
+          <div style={{ minWidth: 560, userSelect: "none" }}>
 
-      {/* Calendar grid */}
-      <div style={{ border: "1px solid var(--border)", overflow: "hidden", marginBottom: 24 }}>
-        {/* Weekday headers */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", background: "var(--charcoal)" }}>
-          {["Mon","Tue","Wed","Thu","Fri","Sat","Sun"].map(d => (
-            <div key={d} style={{ textAlign: "center", padding: "8px 0", fontSize: 10, fontWeight: 600, letterSpacing: "1.5px", textTransform: "uppercase", color: "var(--cream)" }}>{d}</div>
-          ))}
-        </div>
-        {/* Day cells */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: "1px", background: "var(--border)" }}>
-          {(() => {
-            const first = (new Date(dashYear, dashMonth, 1).getDay() + 6) % 7;
-            const total = getDaysInMonth(dashYear, dashMonth);
-            const prevTotal = getDaysInMonth(dashMonth === 0 ? dashYear - 1 : dashYear, dashMonth === 0 ? 11 : dashMonth - 1);
-            const cells = [];
-
-            // Prev month overflow
-            for (let i = 0; i < first; i++) {
-              cells.push(
-                <div key={"p" + i} style={{ background: "var(--warm-white)", minHeight: 64, padding: "6px 8px", opacity: .25 }}>
-                  <div style={{ fontSize: 12, fontWeight: 600, color: "var(--charcoal)" }}>{prevTotal - first + 1 + i}</div>
-                </div>
-              );
-            }
-
-            // Current month
-            for (let d = 1; d <= total; d++) {
-              const ds = dateStr(dashYear, dashMonth, d);
-              const isToday = d === today.getDate() && dashMonth === today.getMonth() && dashYear === today.getFullYear();
-              const isSel = selectedDay && selectedDay.day === d && selectedDay.month === dashMonth && selectedDay.year === dashYear;
-              const dayBks = bookings.filter(b => b.booking_date === ds);
-              const count = dayBks.length;
-
-              cells.push(
-                <div key={d}
-                  onClick={() => setSelectedDay({ day: d, month: dashMonth, year: dashYear })}
-                  style={{
-                    background: isSel ? "var(--charcoal)" : isToday ? "rgba(201,169,110,.1)" : "var(--warm-white)",
-                    minHeight: 64,
-                    padding: "6px 8px",
-                    cursor: "pointer",
-                    transition: "background .15s",
-                    borderTop: isToday && !isSel ? "2px solid var(--gold)" : "none",
-                    userSelect: "none",
-                  }}
-                  onMouseEnter={e => { if (!isSel) e.currentTarget.style.background = "var(--blush)"; }}
-                  onMouseLeave={e => { if (!isSel) e.currentTarget.style.background = isToday ? "rgba(201,169,110,.1)" : "var(--warm-white)"; }}
-                >
-                  <div style={{ fontSize: 12, fontWeight: 600, color: isSel ? "var(--cream)" : "var(--charcoal)", marginBottom: 4 }}>{d}</div>
-                  {count > 0 && (
-                    <div style={{ display: "flex", flexWrap: "wrap", gap: 2 }}>
-                      {count <= 3 ? (
-                        dayBks.slice(0, 3).map((_, i) => (
-                          <div key={i} style={{ width: 6, height: 6, borderRadius: "50%", background: isSel ? "var(--gold)" : "var(--gold)" }} />
-                        ))
-                      ) : (
-                        <>
-                          <div style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--gold)" }} />
-                          <div style={{ fontSize: 10, color: isSel ? "var(--gold-light)" : "var(--gold)", fontWeight: 600, lineHeight: "6px" }}>+{count}</div>
-                        </>
-                      )}
-                    </div>
-                  )}
-                </div>
-              );
-            }
-
-            // Next month overflow
-            const remainder = (first + total) % 7;
-            if (remainder > 0) {
-              for (let i = 1; i <= 7 - remainder; i++) {
-                cells.push(
-                  <div key={"n" + i} style={{ background: "var(--warm-white)", minHeight: 64, padding: "6px 8px", opacity: .25 }}>
-                    <div style={{ fontSize: 12, fontWeight: 600, color: "var(--charcoal)" }}>{i}</div>
-                  </div>
-                );
-              }
-            }
-            return cells;
-          })()}
-        </div>
-      </div>
-
-      {/* Day detail panel */}
-      {selectedDay && (
-        <div>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
-            <div style={{ fontFamily: "'Cormorant Garamond',serif", fontSize: 20, fontWeight: 400 }}>
-              {getDayName(selectedDay.year, selectedDay.month, selectedDay.day)}{" "}
-              {selectedDay.day} {getMonthName(selectedDay.month)}
-            </div>
-            <div style={{ fontSize: 12, color: "var(--warm-gray)", fontWeight: 300 }}>
-              {dayBookings.length === 0 ? "No bookings" : dayBookings.length + " booking" + (dayBookings.length !== 1 ? "s" : "")}
-            </div>
-          </div>
-
-          {loading ? (
-            <div style={{ color: "var(--warm-gray)", fontSize: 14, fontWeight: 300, padding: "20px 0" }}>Loading...</div>
-          ) : dayBookings.length === 0 ? (
-            <div style={{ padding: "28px 0", color: "var(--warm-gray)", fontSize: 14, fontWeight: 300, borderTop: "1px solid var(--border)" }}>
-              No bookings on this day.
-            </div>
-          ) : (
-            <div>
-              {dayBookings.map(b => {
-                const treatmentName = b.service_title || b.service_name || "Service";
+            {/* Day header row */}
+            <div style={{ display: "grid", gridTemplateColumns: "48px repeat(7, 1fr)", borderBottom: "1px solid var(--border)" }}>
+              <div style={{ background: "var(--charcoal)" }} />
+              {days.map((d, i) => {
+                const isToday = d.getTime() === today.getTime();
                 return (
-                  <div key={b.id}
-                    onClick={() => setModalBooking(b)}
-                    style={{ display: "flex", alignItems: "center", gap: 16, padding: "14px 18px", background: "var(--warm-white)", border: "1px solid var(--border)", marginBottom: 8, cursor: "pointer", transition: "all .2s" }}
-                    onMouseEnter={e => { e.currentTarget.style.borderColor = "var(--gold)"; e.currentTarget.style.boxShadow = "0 2px 12px rgba(44,40,37,.06)"; }}
-                    onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--border)"; e.currentTarget.style.boxShadow = "none"; }}
-                  >
-                    {/* Time column */}
-                    <div style={{ flexShrink: 0, width: 52, textAlign: "center" }}>
-                      <div style={{ fontSize: 15, fontWeight: 600, fontFamily: "'Outfit',sans-serif", color: "var(--charcoal)" }}>{b.booking_time?.slice(0, 5)}</div>
-                      <div style={{ fontSize: 10, color: "var(--warm-gray)", fontWeight: 300, marginTop: 2 }}>{b.duration} min</div>
-                    </div>
-                    {/* Gold line */}
-                    <div style={{ width: 2, height: 36, background: "var(--gold)", flexShrink: 0, borderRadius: 1 }} />
-                    {/* Info */}
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontWeight: 500, fontSize: 14, marginBottom: 2 }}>{b.client_name}</div>
-                      <div style={{ fontSize: 12, color: "var(--warm-gray)", fontWeight: 300, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{treatmentName}</div>
-                    </div>
-                    {/* Price + arrow */}
-                    <div style={{ flexShrink: 0, textAlign: "right" }}>
-                      <div style={{ fontSize: 14, fontWeight: 600, color: "var(--gold)" }}>£{b.price}</div>
-                      <div style={{ fontSize: 11, color: "var(--border)", marginTop: 2 }}>›</div>
-                    </div>
+                  <div key={i} style={{
+                    background: isToday ? "var(--gold)" : "var(--charcoal)",
+                    color: isToday ? "var(--charcoal)" : "var(--cream)",
+                    textAlign: "center",
+                    padding: "10px 4px",
+                    borderLeft: "1px solid rgba(255,255,255,.08)",
+                  }}>
+                    <div style={{ fontSize: 10, fontWeight: 600, letterSpacing: "1.5px" }}>{DAY_NAMES_SHORT[i]}</div>
+                    <div style={{ fontSize: 14, fontWeight: isToday ? 700 : 400, marginTop: 3 }}>{d.getDate()}</div>
                   </div>
                 );
               })}
             </div>
-          )}
+
+            {/* Grid body */}
+            <div style={{ display: "grid", gridTemplateColumns: "48px repeat(7, 1fr)", position: "relative" }}>
+
+              {/* Time labels column */}
+              <div style={{ position: "relative", height: TOTAL_SLOTS * SLOT_H }}>
+                {timeLabels.map(({ label, top }) => (
+                  <div key={label} style={{
+                    position: "absolute",
+                    top: top - 8,
+                    right: 6,
+                    fontSize: 10,
+                    color: "var(--warm-gray)",
+                    letterSpacing: ".3px",
+                    lineHeight: 1,
+                    whiteSpace: "nowrap",
+                  }}>{label}</div>
+                ))}
+              </div>
+
+              {/* Day columns */}
+              {days.map((d, di) => {
+                const ds = toDateStr(d);
+                const dayBookings = bookingsByDate[ds] || [];
+                const isToday = d.getTime() === today.getTime();
+
+                return (
+                  <div key={di} style={{
+                    position: "relative",
+                    height: TOTAL_SLOTS * SLOT_H,
+                    borderLeft: "1px solid var(--border)",
+                    background: isToday ? "rgba(201,169,110,.04)" : "transparent",
+                  }}>
+                    {/* Hour lines */}
+                    {Array.from({ length: HOUR_END - HOUR_START + 1 }, (_, i) => (
+                      <div key={i} style={{
+                        position: "absolute",
+                        top: i * 2 * SLOT_H,
+                        left: 0, right: 0,
+                        borderTop: `1px solid var(--border)`,
+                        pointerEvents: "none",
+                      }} />
+                    ))}
+                    {/* Half-hour lines */}
+                    {Array.from({ length: HOUR_END - HOUR_START }, (_, i) => (
+                      <div key={"h" + i} style={{
+                        position: "absolute",
+                        top: (i * 2 + 1) * SLOT_H,
+                        left: 0, right: 0,
+                        borderTop: "1px solid rgba(232,226,220,.4)",
+                        pointerEvents: "none",
+                      }} />
+                    ))}
+
+                    {/* Now line */}
+                    {nowDayIdx === di && nowTop !== null && (
+                      <div style={{
+                        position: "absolute",
+                        left: 0, right: 0,
+                        top: nowTop,
+                        height: 2,
+                        background: "var(--red)",
+                        zIndex: 3,
+                        pointerEvents: "none",
+                      }}>
+                        <div style={{ position: "absolute", left: -1, top: -4, width: 8, height: 8, borderRadius: "50%", background: "var(--red)" }} />
+                      </div>
+                    )}
+
+                    {/* Booking blocks */}
+                    {dayBookings.map(b => {
+                      const { top, height } = bookingStyle(b);
+                      return (
+                        <div key={b.id}
+                          onClick={() => setSheet(b)}
+                          style={{
+                            position: "absolute",
+                            top,
+                            height,
+                            left: 2,
+                            right: 2,
+                            background: "var(--gold)",
+                            borderLeft: "3px solid var(--charcoal)",
+                            borderRadius: 2,
+                            padding: "3px 6px",
+                            cursor: "pointer",
+                            overflow: "hidden",
+                            zIndex: 2,
+                            transition: "filter .15s",
+                          }}
+                          onMouseEnter={e => e.currentTarget.style.filter = "brightness(.9)"}
+                          onMouseLeave={e => e.currentTarget.style.filter = "none"}
+                        >
+                          <div style={{ fontSize: 11, fontWeight: 600, color: "var(--charcoal)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                            {b.client_name}
+                          </div>
+                          {height >= 44 && (
+                            <div style={{ fontSize: 10, color: "rgba(44,40,37,.65)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", marginTop: 1 }}>
+                              {b.service_title || b.service_name || "Service"}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
         </div>
       )}
 
-      {/* Booking detail modal */}
-      {modalBooking && (
-        <BookingModal
-          booking={modalBooking}
-          prac={prac}
-          token={auth?.access_token}
-          onClose={() => setModalBooking(null)}
-          onUpdated={(id, action, data) => {
-            onBookingUpdated(id, action, data);
-            setModalBooking(null);
-          }}
-        />
+      {/* Bottom sheet */}
+      {sheet && (
+        <>
+          <div
+            style={{ position: "fixed", inset: 0, background: "rgba(44,40,37,.4)", zIndex: 300 }}
+            onClick={() => setSheet(null)}
+          />
+          <div style={{
+            position: "fixed",
+            bottom: 0,
+            left: 0,
+            right: 0,
+            background: "var(--cream)",
+            borderTop: "1px solid var(--border)",
+            borderRadius: "12px 12px 0 0",
+            zIndex: 301,
+            padding: "0 24px 48px",
+            maxHeight: "85vh",
+            overflowY: "auto",
+            animation: "sheetUp .3s cubic-bezier(.22,1,.36,1)",
+          }}>
+            {/* Handle */}
+            <div style={{ width: 36, height: 4, background: "var(--border)", borderRadius: 2, margin: "14px auto 28px" }} />
+
+            <div style={{ fontFamily: "'Cormorant Garamond',serif", fontSize: 26, fontWeight: 300, marginBottom: 4 }}>
+              {sheet.client_name}
+            </div>
+            <div style={{ fontSize: 13, color: "var(--warm-gray)", fontWeight: 300, marginBottom: 28 }}>
+              {new Date(sheet.booking_date + "T12:00:00").toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" })} at {sheet.booking_time?.slice(0, 5)}
+            </div>
+
+            {[
+              ["Service", sheet.service_title || sheet.service_name || "Service"],
+              ["Duration", sheet.duration + " min"],
+              ["Price", "£" + sheet.price],
+              ["Phone", sheet.client_phone],
+              sheet.client_email ? ["Email", sheet.client_email] : null,
+              sheet.notes ? ["Notes", sheet.notes] : null,
+            ].filter(Boolean).map(([label, val]) => (
+              <div key={label} style={{ display: "flex", justifyContent: "space-between", padding: "12px 0", borderBottom: "1px solid var(--border)", fontSize: 14 }}>
+                <span style={{ color: "var(--warm-gray)", fontWeight: 300 }}>{label}</span>
+                <span style={{ fontWeight: 500, textAlign: "right", maxWidth: "60%" }}>{val}</span>
+              </div>
+            ))}
+
+            <div style={{ display: "flex", gap: 10, marginTop: 28 }}>
+              <button onClick={() => setSheet(null)}
+                style={{ flex: 1, padding: "14px", background: "none", border: "1.5px solid var(--border)", cursor: "pointer", fontFamily: "'Outfit',sans-serif", fontSize: 12, fontWeight: 500, letterSpacing: "1.5px", textTransform: "uppercase", color: "var(--charcoal)" }}>
+                Close
+              </button>
+              <button onClick={() => { onStatusChange(sheet.id, "completed"); setSheet(null); }}
+                style={{ flex: 1, padding: "14px", background: "var(--green)", color: "#fff", border: "none", cursor: "pointer", fontFamily: "'Outfit',sans-serif", fontSize: 12, fontWeight: 500, letterSpacing: "1.5px", textTransform: "uppercase" }}>
+                Mark Done
+              </button>
+              <button onClick={() => { onStatusChange(sheet.id, "cancelled"); setSheet(null); }}
+                style={{ flex: 1, padding: "14px", background: "none", color: "var(--red)", border: "1px solid var(--red)", cursor: "pointer", fontFamily: "'Outfit',sans-serif", fontSize: 12, fontWeight: 500, letterSpacing: "1.5px", textTransform: "uppercase" }}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </>
       )}
     </div>
   );
 }
 
 // ============================================================
-// DASHBOARD
+// DASHBOARD (main staff portal — exported as default)
 // ============================================================
 
 export default function Dashboard({ onBack }) {
@@ -782,9 +697,7 @@ export default function Dashboard({ onBack }) {
   const [blockSaving, setBlockSaving] = useState(false);
   const [showStaffBooking, setShowStaffBooking] = useState(false);
   const [staffBookServices, setStaffBookServices] = useState([]);
-  const [dashMonth, setDashMonth] = useState(new Date().getMonth());
-  const [dashYear, setDashYear] = useState(new Date().getFullYear());
-  const DAY_NAMES = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
+  const DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 
   async function handleLogin(e) {
     e.preventDefault(); setLoginErr("");
@@ -798,31 +711,64 @@ export default function Dashboard({ onBack }) {
     } catch (e) { setLoginErr(e.message); }
   }
 
-  // Load bookings for selected month
+  // Fetch bookings — load a wide window (3 months back + 3 months forward) so week navigation works
   useEffect(() => {
     if (!auth || !prac || tab !== "bookings") return;
     if (IS_DEMO) {
       const demoToday = new Date().toISOString().split("T")[0];
+      const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate() + 1);
+      const tomorrowStr = tomorrow.toISOString().split("T")[0];
       setBookings([
         { id: "d1", client_name: "Sarah J.", client_phone: "07700 123456", booking_date: demoToday, booking_time: "10:00:00", duration: 45, price: 30, status: "confirmed", service_title: "Gel Manicure" },
         { id: "d2", client_name: "Emma W.", client_phone: "07700 654321", booking_date: demoToday, booking_time: "11:30:00", duration: 60, price: 40, status: "confirmed", service_title: "Lash Lift & Tint" },
-        { id: "d3", client_name: "Lucy T.", client_phone: "07700 111222", booking_date: demoToday, booking_time: "14:00:00", duration: 45, price: 35, status: "confirmed", service_title: "Brow Lamination" },
+        { id: "d3", client_name: "Lucy T.", client_phone: "07700 111222", booking_date: tomorrowStr, booking_time: "09:30:00", duration: 45, price: 35, status: "confirmed", service_title: "Brow Lamination" },
+        { id: "d4", client_name: "Hannah R.", client_phone: "07700 333444", booking_date: tomorrowStr, booking_time: "14:00:00", duration: 60, price: 55, status: "confirmed", service_title: "Luxury Facial" },
       ]);
       return;
     }
     setLoading(true);
-    const monthStart = dashYear + "-" + String(dashMonth + 1).padStart(2, "0") + "-01";
-    const monthEnd = dashYear + "-" + String(dashMonth + 1).padStart(2, "0") + "-" + String(getDaysInMonth(dashYear, dashMonth)).padStart(2, "0");
+    const now = new Date();
+    const rangeStart = new Date(now); rangeStart.setMonth(rangeStart.getMonth() - 1);
+    const rangeEnd = new Date(now); rangeEnd.setMonth(rangeEnd.getMonth() + 3);
+    const startStr = rangeStart.toISOString().split("T")[0];
+    const endStr = rangeEnd.toISOString().split("T")[0];
+
     supabase.query("bookings", {
       select: "*",
-      filters: "&practitioner_id=eq." + prac.id + "&booking_date=gte." + monthStart + "&booking_date=lte." + monthEnd + "&status=eq.confirmed&order=booking_date.asc,booking_time.asc",
+      filters: "&practitioner_id=eq." + prac.id + "&booking_date=gte." + startStr + "&booking_date=lte." + endStr + "&status=eq.confirmed&order=booking_date,booking_time",
       token: auth.access_token,
-    }).then(rows => {
+    }).then(async (rows) => {
+      if (rows.length > 0) {
+        try {
+          const svcIds = [...new Set(rows.map(r => r.service_id).filter(Boolean))];
+          if (svcIds.length > 0) {
+            const svcs = await supabase.query("custom_services", {
+              select: "id,title",
+              filters: "&id=in.(" + svcIds.join(",") + ")",
+              token: auth.access_token,
+            });
+            const svcMap = Object.fromEntries(svcs.map(s => [s.id, s.title]));
+            rows = rows.map(b => ({ ...b, service_name: svcMap[b.service_id] || null }));
+          }
+        } catch (e) {
+          try {
+            const svcIds = [...new Set(rows.map(r => r.service_id).filter(Boolean))];
+            if (svcIds.length > 0) {
+              const svcs = await supabase.query("services", {
+                select: "id,name",
+                filters: "&id=in.(" + svcIds.join(",") + ")",
+                token: auth.access_token,
+              });
+              const svcMap = Object.fromEntries(svcs.map(s => [s.id, s.name]));
+              rows = rows.map(b => ({ ...b, service_name: svcMap[b.service_id] || null }));
+            }
+          } catch (e2) { /* ignore */ }
+        }
+      }
       setBookings(rows);
     }).catch(console.error).finally(() => setLoading(false));
-  }, [auth, prac, tab, dashMonth, dashYear]);
+  }, [auth, prac, tab]);
 
-  // Load staff booking services
   useEffect(() => {
     if (!auth || !prac || !showStaffBooking) return;
     if (IS_DEMO) { setStaffBookServices(DEMO_SERVICES_LIST); return; }
@@ -835,13 +781,28 @@ export default function Dashboard({ onBack }) {
 
   function refreshBookings() {
     if (!auth || !prac || IS_DEMO) return;
-    const monthStart = dashYear + "-" + String(dashMonth + 1).padStart(2, "0") + "-01";
-    const monthEnd = dashYear + "-" + String(dashMonth + 1).padStart(2, "0") + "-" + String(getDaysInMonth(dashYear, dashMonth)).padStart(2, "0");
+    const now = new Date();
+    const rangeStart = new Date(now); rangeStart.setMonth(rangeStart.getMonth() - 1);
+    const rangeEnd = new Date(now); rangeEnd.setMonth(rangeEnd.getMonth() + 3);
+    const startStr = rangeStart.toISOString().split("T")[0];
+    const endStr = rangeEnd.toISOString().split("T")[0];
     supabase.query("bookings", {
       select: "*",
-      filters: "&practitioner_id=eq." + prac.id + "&booking_date=gte." + monthStart + "&booking_date=lte." + monthEnd + "&status=eq.confirmed&order=booking_date.asc,booking_time.asc",
+      filters: "&practitioner_id=eq." + prac.id + "&booking_date=gte." + startStr + "&booking_date=lte." + endStr + "&status=eq.confirmed&order=booking_date,booking_time",
       token: auth.access_token,
-    }).then(rows => setBookings(rows)).catch(console.error);
+    }).then(async (rows) => {
+      if (rows.length > 0) {
+        try {
+          const svcIds = [...new Set(rows.map(r => r.service_id).filter(Boolean))];
+          if (svcIds.length > 0) {
+            const svcs = await supabase.query("custom_services", { select: "id,title", filters: "&id=in.(" + svcIds.join(",") + ")", token: auth.access_token });
+            const svcMap = Object.fromEntries(svcs.map(s => [s.id, s.title]));
+            rows = rows.map(b => ({ ...b, service_name: svcMap[b.service_id] || null }));
+          }
+        } catch (e) { /* ignore */ }
+      }
+      setBookings(rows);
+    }).catch(console.error);
   }
 
   useEffect(() => {
@@ -875,6 +836,12 @@ export default function Dashboard({ onBack }) {
       setAvailability(filled); setBlockedDates(blocked);
     }).catch(console.error);
   }, [auth, prac, tab]);
+
+  async function updateStatus(bookingId, status) {
+    if (IS_DEMO) { setBookings(prev => prev.map(b => b.id === bookingId ? { ...b, status } : b)); return; }
+    await supabase.update("bookings", { status }, "id=eq." + bookingId, auth.access_token);
+    setBookings(prev => prev.map(b => b.id === bookingId ? { ...b, status } : b));
+  }
 
   async function saveAvailability(day) {
     const row = availability[day];
@@ -920,7 +887,6 @@ export default function Dashboard({ onBack }) {
     } catch (e) { console.error(e); }
   }
 
-  // Login screen
   if (!auth) {
     return (
       <div className="nn-login">
@@ -940,6 +906,7 @@ export default function Dashboard({ onBack }) {
     );
   }
 
+  const confirmedBookings = bookings.filter(b => b.status === "confirmed");
   const dashGroups = [...new Set(customServices.filter(s => s.group_name).map(s => s.group_name))];
   const dashUngrouped = customServices.filter(s => !s.group_name);
 
@@ -948,7 +915,7 @@ export default function Dashboard({ onBack }) {
       <div className="nn-dash-header">
         <div>
           <div className="nn-dash-greeting">Hello, {prac?.name}</div>
-          <div style={{ fontSize: 13, color: "var(--warm-gray)", fontWeight: 300, marginTop: 4 }}>{prac?.specialty}</div>
+          <div style={{ fontSize: 14, color: "var(--warm-gray)", fontWeight: 300, marginTop: 4 }}>{prac?.specialty}</div>
         </div>
         <div style={{ display: "flex", gap: 12 }}>
           <button className="nn-btn-back" onClick={() => { setAuth(null); setPrac(null); }}>Sign Out</button>
@@ -964,35 +931,24 @@ export default function Dashboard({ onBack }) {
 
       {/* ── BOOKINGS TAB ── */}
       {tab === "bookings" && (
-        showStaffBooking ? (
-          <StaffBookingForm
-            prac={prac}
-            services={staffBookServices}
-            token={auth.access_token}
-            onDone={() => { setShowStaffBooking(false); refreshBookings(); }}
-            onCancel={() => setShowStaffBooking(false)}
-          />
-        ) : (
-          <BookingsTab
-            prac={prac}
-            auth={auth}
-            bookings={bookings}
-            loading={loading}
-            dashMonth={dashMonth}
-            dashYear={dashYear}
-            setDashMonth={setDashMonth}
-            setDashYear={setDashYear}
-            onAddBooking={() => setShowStaffBooking(true)}
-            onBookingUpdated={(id, action, data) => {
-              if (action === "rescheduled" && data) {
-                setBookings(prev => prev.map(b => b.id === id ? { ...b, booking_date: data.booking_date, booking_time: data.booking_time } : b));
-              } else {
-                // cancelled or completed — remove from confirmed list
-                setBookings(prev => prev.filter(b => b.id !== id));
-              }
-            }}
-          />
-        )
+        <div>
+          {showStaffBooking ? (
+            <StaffBookingForm
+              prac={prac}
+              services={staffBookServices}
+              token={auth.access_token}
+              onDone={() => { setShowStaffBooking(false); refreshBookings(); }}
+              onCancel={() => setShowStaffBooking(false)}
+            />
+          ) : (
+            <WeekView
+              bookings={confirmedBookings}
+              loading={loading}
+              onAddBooking={() => setShowStaffBooking(true)}
+              onStatusChange={updateStatus}
+            />
+          )}
+        </div>
       )}
 
       {/* ── SERVICES TAB ── */}
@@ -1055,9 +1011,8 @@ export default function Dashboard({ onBack }) {
       {/* ── SCHEDULE TAB ── */}
       {tab === "schedule" && (
         <div style={{ maxWidth: 680 }}>
-          <p style={{ fontSize: 14, color: "var(--warm-gray)", fontWeight: 300, marginBottom: 32, lineHeight: 1.7 }}>Set your working days and hours. Block out specific dates for holidays or time off.</p>
+          <p style={{ fontSize: 14, color: "var(--warm-gray)", fontWeight: 300, marginBottom: 32, lineHeight: 1.7 }}>Set your working days and hours. Block out specific dates or time ranges for holidays or days off.</p>
 
-          {/* Weekly hours */}
           <div style={{ fontFamily: "'Cormorant Garamond',serif", fontSize: 20, fontWeight: 400, marginBottom: 20, paddingBottom: 12, borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 12 }}>
             <span style={{ width: 20, height: 1.5, background: "var(--gold)", display: "inline-block" }} />Weekly Hours
           </div>
@@ -1083,39 +1038,10 @@ export default function Dashboard({ onBack }) {
             </div>
           ))}
 
-          {/* Booking window */}
           <div style={{ fontFamily: "'Cormorant Garamond',serif", fontSize: 20, fontWeight: 400, margin: "40px 0 20px", paddingBottom: 12, borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 12 }}>
-            <span style={{ width: 20, height: 1.5, background: "var(--gold)", display: "inline-block" }} />Booking Window
-          </div>
-          <p style={{ fontSize: 14, color: "var(--warm-gray)", fontWeight: 300, marginBottom: 20, lineHeight: 1.7 }}>How far in advance can clients book with you?</p>
-          <div style={{ display: "flex", alignItems: "center", gap: 16, padding: "20px", background: "var(--warm-white)", border: "1.5px solid var(--border)", marginBottom: 32 }}>
-            <select
-              value={prac?.booking_window_weeks || 8}
-              onChange={async (e) => {
-                const weeks = parseInt(e.target.value);
-                if (IS_DEMO) return;
-                try {
-                  await supabase.update("practitioners", { booking_window_weeks: weeks }, "id=eq." + prac.id, auth.access_token);
-                  setPrac(prev => ({ ...prev, booking_window_weeks: weeks }));
-                } catch (e) { console.error(e); }
-              }}
-              style={{ padding: "12px 16px", border: "1.5px solid var(--border)", background: "var(--cream)", fontFamily: "'Outfit',sans-serif", fontSize: 14, outline: "none", color: "var(--charcoal)", cursor: "pointer", minWidth: 160 }}
-            >
-              {Array.from({ length: 25 }, (_, i) => i + 2).map(w => (
-                <option key={w} value={w}>{w} weeks</option>
-              ))}
-            </select>
-            <span style={{ fontSize: 13, color: "var(--warm-gray)", fontWeight: 300 }}>ahead</span>
-          </div>
-          <p style={{ fontSize: 12, color: "var(--warm-gray)", fontWeight: 300, marginTop: -24, marginBottom: 32 }}>
-            Clients will only be able to book up to {prac?.booking_window_weeks || 8} weeks ahead. You'll need to add a <code style={{ fontSize: 11, background: "var(--blush)", padding: "1px 5px" }}>booking_window_weeks</code> column to your practitioners table in Supabase for this to take effect.
-          </p>
-
-          {/* Blocked dates */}
-          <div style={{ fontFamily: "'Cormorant Garamond',serif", fontSize: 20, fontWeight: 400, margin: "8px 0 20px", paddingBottom: 12, borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 12 }}>
             <span style={{ width: 20, height: 1.5, background: "var(--gold)", display: "inline-block" }} />Blocked Dates
           </div>
-          <p style={{ fontSize: 13, color: "var(--warm-gray)", fontWeight: 300, marginBottom: 20, lineHeight: 1.7 }}>Block a full day off, or just specific hours.</p>
+          <p style={{ fontSize: 13, color: "var(--warm-gray)", fontWeight: 300, marginBottom: 20, lineHeight: 1.7 }}>Block a full day off, or just specific hours within a day.</p>
           <div style={{ marginBottom: 24 }}>
             <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
               <button onClick={() => setBlockType("full")} style={{ padding: "10px 20px", background: blockType === "full" ? "var(--charcoal)" : "none", color: blockType === "full" ? "var(--cream)" : "var(--charcoal)", border: blockType === "full" ? "1.5px solid var(--charcoal)" : "1.5px solid var(--border)", cursor: "pointer", fontFamily: "'Outfit',sans-serif", fontSize: 12, fontWeight: 500, letterSpacing: "1.5px", textTransform: "uppercase", transition: "all .2s" }}>Full Day</button>
@@ -1157,13 +1083,12 @@ export default function Dashboard({ onBack }) {
             ))
           )}
 
-          {/* Slot interval */}
           <div style={{ fontFamily: "'Cormorant Garamond',serif", fontSize: 20, fontWeight: 400, margin: "40px 0 20px", paddingBottom: 12, borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 12 }}>
             <span style={{ width: 20, height: 1.5, background: "var(--gold)", display: "inline-block" }} />Booking Slots
           </div>
-          <p style={{ fontSize: 14, color: "var(--warm-gray)", fontWeight: 300, marginBottom: 20, lineHeight: 1.7 }}>How often should available time slots appear?</p>
+          <p style={{ fontSize: 14, color: "var(--warm-gray)", fontWeight: 300, marginBottom: 20, lineHeight: 1.7 }}>How often should available time slots appear in the booking calendar?</p>
           <div style={{ display: "flex", gap: 12, alignItems: "center", padding: "16px 20px", background: "var(--warm-white)", border: "1.5px solid var(--border)", marginBottom: 32 }}>
-            <span style={{ fontSize: 14, fontWeight: 500, marginRight: 8 }}>Every</span>
+            <span style={{ fontSize: 14, fontWeight: 500, marginRight: 8 }}>Show slots every</span>
             {[15, 30, 60].map(mins => (
               <button key={mins} onClick={async () => {
                 if (IS_DEMO) return;
@@ -1181,7 +1106,6 @@ export default function Dashboard({ onBack }) {
             ))}
           </div>
 
-          {/* Calendar sync */}
           <div style={{ fontFamily: "'Cormorant Garamond',serif", fontSize: 20, fontWeight: 400, margin: "40px 0 20px", paddingBottom: 12, borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 12 }}>
             <span style={{ width: 20, height: 1.5, background: "var(--gold)", display: "inline-block" }} />Calendar Sync
           </div>
@@ -1197,7 +1121,7 @@ export default function Dashboard({ onBack }) {
             </div>
           </div>
           <p style={{ fontSize: 13, color: "var(--warm-gray)", fontWeight: 300, lineHeight: 1.7 }}>
-            <strong>Google Calendar:</strong> Other calendars → + → From URL → paste link<br />
+            <strong>Google Calendar:</strong> Open Google Calendar → Other calendars → + → From URL → paste link<br />
             <strong>Apple Calendar:</strong> File → New Calendar Subscription → paste link
           </p>
         </div>
