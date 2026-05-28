@@ -426,9 +426,9 @@ const maxDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() + wind
 const tooFar = new Date(cY, cM, d) > maxDate;
                     const sel = date && date.day === d && date.month === cM && date.year === cY;
                     cells.push(
-                      <button key={d} className={"nn-cal-day" + (sel ? " on" : "") + (past || unavail ? " off" : "") + (isNow ? " now" : "")}
+                      <button key={d} className={"nn-cal-day" + (sel ? " on" : "") + (past || unavail || tooFar ? " off" : "") + (isNow ? " now" : "")}
                         onClick={() => { if (!past && !unavail) { setDate({ day: d, month: cM, year: cY }); setTime(null); } }}
-                        disabled={past || unavail}>{d}</button>
+                        disabled={past || unavail || tooFar}>{d}</button>
                     );
                   }
                   return cells;
