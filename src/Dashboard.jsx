@@ -363,61 +363,191 @@ function StaffBookingForm({ prac, services, token, onDone, onCancel }) {
   );
 }
 
-// ============================================================
-// BOOKING DETAIL MODAL (click a booking to edit/cancel)
-// ============================================================
+// Everything else in Dashboard.jsx stays identical.
 
-function BookingModal({ booking, token, onClose, onUpdated }) {
-  const [status, setStatus] = useState("idle"); // idle | saving | done
+function BookingModal({ booking, prac, token, onClose, onUpdated }) {
+  const [view, setView] = useState("detail"); // "detail" | "edit" | "confirm_cancel"
+  const [editDate, setEditDate] = useState(null);
+  const [editTime, setEditTime] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const now = new Date();
+  const [cM, setCM] = useState(now.getMonth());
+  const [cY, setCY] = useState(now.getFullYear());
+
   const treatmentName = booking.service_title || booking.service_name || "Service";
   const dateStr2 = booking.booking_date
-    ? new Date(booking.booking_date + "T12:00:00").toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" })
+    ? new Date(booking.booking_date + "T12:00:00").toLocaleDateString("en-GB", {
+        weekday: "long", day: "numeric", month: "long",
+      })
     : "";
 
-  async function handleStatus(newStatus) {
-    setStatus("saving");
+  const { slots, loading: slotsLoading } = useAvailableSlots(
+    prac?.id, editDate, booking.duration, prac?.slot_interval || 30
+  );
+
+  async function handleReschedule() {
+    if (!editDate || !editTime) return;
+    setSaving(true);
     try {
       if (!IS_DEMO) {
-        await supabase.update("bookings", { status: newStatus }, "id=eq." + booking.id, token);
+        await supabase.update("bookings", {
+          booking_date: dateStr(editDate.year, editDate.month, editDate.day),
+          booking_time: editTime + ":00",
+        }, "id=eq." + booking.id, token);
       }
-      onUpdated(booking.id, newStatus);
+      onUpdated(booking.id, "rescheduled", {
+        booking_date: dateStr(editDate.year, editDate.month, editDate.day),
+        booking_time: editTime + ":00",
+      });
       onClose();
-    } catch (e) { console.error(e); setStatus("idle"); }
+    } catch (e) { console.error(e); setSaving(false); }
+  }
+
+  async function handleCancel() {
+    setSaving(true);
+    try {
+      if (!IS_DEMO) {
+        await supabase.update("bookings", { status: "cancelled" }, "id=eq." + booking.id, token);
+      }
+      onUpdated(booking.id, "cancelled");
+      onClose();
+    } catch (e) { console.error(e); setSaving(false); }
   }
 
   return (
-    <div style={{ position: "fixed", inset: 0, zIndex: 300, background: "rgba(44,40,37,.45)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}
-      onClick={onClose}>
-      <div style={{ background: "var(--cream)", border: "1px solid var(--border)", padding: "28px 24px", maxWidth: 420, width: "100%", position: "relative" }}
-        onClick={e => e.stopPropagation()}>
+    <div
+      style={{ position: "fixed", inset: 0, zIndex: 300, background: "rgba(44,40,37,.45)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}
+      onClick={onClose}
+    >
+      <div
+        style={{ background: "var(--cream)", border: "1px solid var(--border)", padding: "28px 24px", maxWidth: 460, width: "100%", position: "relative", maxHeight: "90vh", overflowY: "auto" }}
+        onClick={e => e.stopPropagation()}
+      >
         <button onClick={onClose} style={{ position: "absolute", top: 16, right: 16, background: "none", border: "none", cursor: "pointer", fontSize: 18, color: "var(--warm-gray)" }}>✕</button>
-        <div style={{ fontFamily: "'Cormorant Garamond',serif", fontSize: 22, fontWeight: 400, marginBottom: 20 }}>Booking details</div>
-        {[
-          ["Client", booking.client_name],
-          ["Treatment", treatmentName],
-          ["Date", dateStr2],
-          ["Time", booking.booking_time?.slice(0, 5)],
-          ["Duration", booking.duration + " min"],
-          ["Price", "£" + booking.price],
-          ["Phone", booking.client_phone],
-          booking.client_email && ["Email", booking.client_email],
-          booking.notes && ["Notes", booking.notes],
-        ].filter(Boolean).map(([label, val]) => (
-          <div key={label} style={{ display: "flex", justifyContent: "space-between", padding: "9px 0", borderBottom: "1px solid var(--border)", fontSize: 13 }}>
-            <span style={{ color: "var(--warm-gray)", fontWeight: 300 }}>{label}</span>
-            <span style={{ fontWeight: 500, textAlign: "right", maxWidth: "60%" }}>{val}</span>
-          </div>
-        ))}
-        <div style={{ display: "flex", gap: 10, marginTop: 24 }}>
-          <button onClick={() => handleStatus("completed")} disabled={status === "saving"}
-            style={{ flex: 1, padding: "12px", background: "var(--green)", color: "#fff", border: "none", cursor: "pointer", fontFamily: "'Outfit',sans-serif", fontSize: 11, fontWeight: 600, letterSpacing: 1, textTransform: "uppercase" }}>
-            Mark Done
-          </button>
-          <button onClick={() => handleStatus("cancelled")} disabled={status === "saving"}
-            style={{ flex: 1, padding: "12px", background: "none", color: "var(--red)", border: "1.5px solid var(--red)", cursor: "pointer", fontFamily: "'Outfit',sans-serif", fontSize: 11, fontWeight: 600, letterSpacing: 1, textTransform: "uppercase" }}>
-            Cancel
-          </button>
-        </div>
+
+        {/* ── DETAIL VIEW ── */}
+        {view === "detail" && (
+          <>
+            <div style={{ fontFamily: "'Cormorant Garamond',serif", fontSize: 22, fontWeight: 400, marginBottom: 20 }}>Booking details</div>
+            {[
+              ["Client", booking.client_name],
+              ["Treatment", treatmentName],
+              ["Date", dateStr2],
+              ["Time", booking.booking_time?.slice(0, 5)],
+              ["Duration", booking.duration + " min"],
+              ["Price", "£" + booking.price],
+              ["Phone", booking.client_phone],
+              booking.client_email && ["Email", booking.client_email],
+              booking.notes && ["Notes", booking.notes],
+            ].filter(Boolean).map(([label, val]) => (
+              <div key={label} style={{ display: "flex", justifyContent: "space-between", padding: "9px 0", borderBottom: "1px solid var(--border)", fontSize: 13 }}>
+                <span style={{ color: "var(--warm-gray)", fontWeight: 300 }}>{label}</span>
+                <span style={{ fontWeight: 500, textAlign: "right", maxWidth: "60%" }}>{val}</span>
+              </div>
+            ))}
+            <div style={{ display: "flex", gap: 10, marginTop: 24 }}>
+              <button
+                onClick={() => setView("edit")}
+                style={{ flex: 1, padding: "12px", background: "var(--charcoal)", color: "var(--cream)", border: "none", cursor: "pointer", fontFamily: "'Outfit',sans-serif", fontSize: 11, fontWeight: 600, letterSpacing: 1, textTransform: "uppercase" }}>
+                Edit
+              </button>
+              <button
+                onClick={() => setView("confirm_cancel")}
+                style={{ flex: 1, padding: "12px", background: "none", color: "var(--red)", border: "1.5px solid var(--red)", cursor: "pointer", fontFamily: "'Outfit',sans-serif", fontSize: 11, fontWeight: 600, letterSpacing: 1, textTransform: "uppercase" }}>
+                Cancel
+              </button>
+            </div>
+          </>
+        )}
+
+        {/* ── EDIT VIEW — reschedule date/time ── */}
+        {view === "edit" && (
+          <>
+            <button onClick={() => setView("detail")} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 12, color: "var(--warm-gray)", fontFamily: "'Outfit',sans-serif", letterSpacing: 1, textTransform: "uppercase", marginBottom: 16, padding: 0 }}>← Back</button>
+            <div style={{ fontFamily: "'Cormorant Garamond',serif", fontSize: 22, fontWeight: 400, marginBottom: 6 }}>Reschedule</div>
+            <div style={{ fontSize: 13, color: "var(--warm-gray)", fontWeight: 300, marginBottom: 20 }}>{booking.client_name} · {treatmentName}</div>
+
+            {/* Calendar */}
+            <div className="nn-cal" style={{ maxWidth: "100%", marginBottom: 20 }}>
+              <div className="nn-cal-head">
+                <button className="nn-cal-btn" onClick={() => { if (cM === 0) { setCM(11); setCY(cY - 1); } else setCM(cM - 1); }}>‹</button>
+                <h3>{getMonthName(cM)} {cY}</h3>
+                <button className="nn-cal-btn" onClick={() => { if (cM === 11) { setCM(0); setCY(cY + 1); } else setCM(cM + 1); }}>›</button>
+              </div>
+              <div className="nn-cal-weekdays">{["Mon","Tue","Wed","Thu","Fri","Sat","Sun"].map(d => <span key={d}>{d}</span>)}</div>
+              <div className="nn-cal-days">
+                {(() => {
+                  const first = (new Date(cY, cM, 1).getDay() + 6) % 7;
+                  const total = getDaysInMonth(cY, cM);
+                  const cells = [];
+                  for (let i = 0; i < first; i++) cells.push(<div className="nn-cal-day nil" key={"e" + i} />);
+                  for (let d = 1; d <= total; d++) {
+                    const isNow = d === now.getDate() && cM === now.getMonth() && cY === now.getFullYear();
+                    const past = new Date(cY, cM, d) < new Date(now.getFullYear(), now.getMonth(), now.getDate());
+                    const sun = new Date(cY, cM, d).getDay() === 0;
+                    const sel = editDate && editDate.day === d && editDate.month === cM && editDate.year === cY;
+                    cells.push(
+                      <button key={d}
+                        className={"nn-cal-day" + (sel ? " on" : "") + (past || sun ? " off" : "") + (isNow ? " now" : "")}
+                        onClick={() => { if (!past && !sun) { setEditDate({ day: d, month: cM, year: cY }); setEditTime(null); } }}
+                        disabled={past || sun}>{d}</button>
+                    );
+                  }
+                  return cells;
+                })()}
+              </div>
+            </div>
+
+            {/* Time slots */}
+            {editDate && (
+              <div style={{ marginBottom: 20 }}>
+                <div style={{ fontSize: 12, color: "var(--warm-gray)", marginBottom: 10, fontWeight: 300 }}>
+                  {getDayName(editDate.year, editDate.month, editDate.day)} {editDate.day} {getMonthName(editDate.month)}
+                </div>
+                {slotsLoading ? (
+                  <div style={{ color: "var(--warm-gray)", fontSize: 13, fontWeight: 300 }}>Loading available times...</div>
+                ) : slots.length === 0 ? (
+                  <div style={{ color: "var(--red)", fontSize: 13, fontWeight: 300 }}>No available slots on this day.</div>
+                ) : (
+                  <div className="nn-times">
+                    {slots.map(t => (
+                      <button key={t} className={"nn-time" + (editTime === t ? " on" : "")} onClick={() => setEditTime(t)}>{t}</button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div style={{ display: "flex", gap: 10, marginTop: 8 }}>
+              <button onClick={() => setView("detail")} className="nn-btn-back" style={{ flex: 1 }}>Cancel</button>
+              <button
+                onClick={handleReschedule}
+                disabled={!editDate || !editTime || saving}
+                style={{ flex: 2, padding: "12px", background: "var(--charcoal)", color: "var(--cream)", border: "none", cursor: "pointer", fontFamily: "'Outfit',sans-serif", fontSize: 11, fontWeight: 600, letterSpacing: 1, textTransform: "uppercase", opacity: editDate && editTime && !saving ? 1 : .35 }}>
+                {saving ? "Saving..." : "Confirm New Time"}
+              </button>
+            </div>
+          </>
+        )}
+
+        {/* ── CANCEL CONFIRMATION ── */}
+        {view === "confirm_cancel" && (
+          <>
+            <div style={{ fontFamily: "'Cormorant Garamond',serif", fontSize: 22, fontWeight: 400, marginBottom: 12 }}>Cancel booking?</div>
+            <p style={{ fontSize: 14, color: "var(--warm-gray)", fontWeight: 300, lineHeight: 1.65, marginBottom: 24 }}>
+              This will cancel {booking.client_name}'s {treatmentName} on {dateStr2}.
+            </p>
+            <div style={{ display: "flex", gap: 10 }}>
+              <button onClick={() => setView("detail")} className="nn-btn-back" style={{ flex: 1 }}>Go back</button>
+              <button
+                onClick={handleCancel}
+                disabled={saving}
+                style={{ flex: 1, padding: "12px", background: "var(--red)", color: "#fff", border: "none", cursor: "pointer", fontFamily: "'Outfit',sans-serif", fontSize: 11, fontWeight: 600, letterSpacing: 1, textTransform: "uppercase" }}>
+                {saving ? "Cancelling..." : "Yes, Cancel"}
+              </button>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
@@ -614,10 +744,11 @@ function BookingsTab({ prac, auth, bookings, loading, dashMonth, dashYear, setDa
       {modalBooking && (
         <BookingModal
           booking={modalBooking}
+          prac={prac}
           token={auth?.access_token}
           onClose={() => setModalBooking(null)}
-          onUpdated={(id, newStatus) => {
-            onBookingUpdated(id, newStatus);
+          onUpdated={(id, action, data) => {
+            onBookingUpdated(id, action, data);
             setModalBooking(null);
           }}
         />
@@ -852,8 +983,13 @@ export default function Dashboard({ onBack }) {
             setDashMonth={setDashMonth}
             setDashYear={setDashYear}
             onAddBooking={() => setShowStaffBooking(true)}
-            onBookingUpdated={(id, newStatus) => {
-              setBookings(prev => prev.filter(b => b.id !== id || newStatus === "completed" ? b.id !== id : true).filter(b => b.id !== id));
+            onBookingUpdated={(id, action, data) => {
+              if (action === "rescheduled" && data) {
+                setBookings(prev => prev.map(b => b.id === id ? { ...b, booking_date: data.booking_date, booking_time: data.booking_time } : b));
+              } else {
+                // cancelled or completed — remove from confirmed list
+                setBookings(prev => prev.filter(b => b.id !== id));
+              }
             }}
           />
         )
