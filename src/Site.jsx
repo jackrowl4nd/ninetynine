@@ -600,24 +600,31 @@ export function CancelPage({ token }) {
 // ============================================================
 
 export function ClientPortal({ email, token }) {
-  const [status, setStatus] = useState("loading"); // loading | ready | invalid | error
+  const [status, setStatus] = useState("loading");
   const [bookings, setBookings] = useState([]);
+  const [editingBooking, setEditingBooking] = useState(null); // booking being rescheduled
   const [cancellingId, setCancellingId] = useState(null);
-  const [cancelledIds, setCancelledIds] = useState([]);
+  const now = new Date();
+  const [cM, setCM] = useState(now.getMonth());
+  const [cY, setCY] = useState(now.getFullYear());
+  const [editDate, setEditDate] = useState(null);
+  const [editTime, setEditTime] = useState(null);
+  const [rescheduling, setRescheduling] = useState(false);
+
+  const { slots, loading: slotsLoading } = useAvailableSlots(
+    editingBooking?.practitioner_id, editDate, editingBooking?.duration, 30
+  );
 
   useEffect(() => {
     if (!email || !token) { setStatus("invalid"); return; }
-
-    // Verify token = first 16 chars of btoa(email + secret)
-    // We use a simple approach: token must equal btoa(email).slice(0,16)
-    // This isn't crypto-secure but it's unguessable for practical purposes
-    // and requires no server round-trip to verify
     const expected = btoa(email.toLowerCase().trim()).replace(/[^a-zA-Z0-9]/g, "").slice(0, 16);
     if (token !== expected) { setStatus("invalid"); return; }
+    loadBookings();
+  }, [email, token]);
 
-    // Fetch all upcoming confirmed bookings for this email
+  function loadBookings() {
     supabase.query("bookings", {
-      select: "*,practitioner:practitioners(name,color)",
+      select: "*,practitioner:practitioners(name,color,slot_interval)",
       filters: "&client_email=eq." + encodeURIComponent(email.toLowerCase().trim()) +
                "&status=eq.confirmed" +
                "&booking_date=gte." + new Date().toISOString().split("T")[0] +
@@ -626,14 +633,47 @@ export function ClientPortal({ email, token }) {
       setBookings(rows);
       setStatus("ready");
     }).catch(() => setStatus("error"));
-  }, [email, token]);
+  }
+
+  function startEdit(booking) {
+    setEditingBooking(booking);
+    setEditDate(null);
+    setEditTime(null);
+    setCM(now.getMonth());
+    setCY(now.getFullYear());
+  }
+
+  function cancelEdit() {
+    setEditingBooking(null);
+    setEditDate(null);
+    setEditTime(null);
+  }
+
+  async function handleReschedule() {
+    if (!editDate || !editTime || !editingBooking) return;
+    setRescheduling(true);
+    try {
+      await supabase.update("bookings", {
+        booking_date: dateStr(editDate.year, editDate.month, editDate.day),
+        booking_time: editTime + ":00",
+        rescheduled_by: "client",
+      }, "id=eq." + editingBooking.id);
+      setEditingBooking(null);
+      setEditDate(null);
+      setEditTime(null);
+      loadBookings();
+    } catch (e) {
+      console.error(e);
+      alert("Something went wrong. Please DM us on Instagram @ninetyninebyk.");
+    }
+    setRescheduling(false);
+  }
 
   async function handleCancel(booking) {
     if (!window.confirm(`Cancel your ${booking.service_title} on ${new Date(booking.booking_date + "T12:00:00").toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" })}?`)) return;
     setCancellingId(booking.id);
     try {
       await supabase.update("bookings", { status: "cancelled", cancelled_by: "client" }, "cancellation_token=eq." + booking.cancellation_token);
-      setCancelledIds(prev => [...prev, booking.id]);
       setBookings(prev => prev.filter(b => b.id !== booking.id));
     } catch (e) {
       console.error(e);
@@ -642,11 +682,10 @@ export function ClientPortal({ email, token }) {
     setCancellingId(null);
   }
 
-  const upcomingBookings = bookings.filter(b => !cancelledIds.includes(b.id));
-
   return (
     <div style={{ minHeight: "100vh", background: "var(--cream)", padding: "40px 24px" }}>
       <div style={{ maxWidth: 520, margin: "0 auto" }}>
+
         {/* Header */}
         <div style={{ textAlign: "center", marginBottom: 48 }}>
           <img src="/logo-dark.png" alt="ninety nine." style={{ height: 28, marginBottom: 20 }} />
@@ -678,7 +717,7 @@ export function ClientPortal({ email, token }) {
           </div>
         )}
 
-        {status === "ready" && upcomingBookings.length === 0 && (
+        {status === "ready" && bookings.length === 0 && (
           <div style={{ textAlign: "center", padding: "32px 0" }}>
             <div style={{ fontFamily: "'Cormorant Garamond',serif", fontSize: 24, fontWeight: 300, marginBottom: 12 }}>No upcoming bookings</div>
             <p style={{ color: "var(--warm-gray)", fontSize: 14, fontWeight: 300, lineHeight: 1.7, marginBottom: 32 }}>
@@ -690,22 +729,25 @@ export function ClientPortal({ email, token }) {
           </div>
         )}
 
-        {status === "ready" && upcomingBookings.length > 0 && (
+        {status === "ready" && bookings.length > 0 && (
           <div>
             <div style={{ fontSize: 11, fontWeight: 500, letterSpacing: "2.5px", textTransform: "uppercase", color: "var(--warm-gray)", marginBottom: 16 }}>
-              {upcomingBookings.length} upcoming appointment{upcomingBookings.length !== 1 ? "s" : ""}
+              {bookings.length} upcoming appointment{bookings.length !== 1 ? "s" : ""}
             </div>
-            {upcomingBookings.map(b => {
+
+            {bookings.map(b => {
               const dateObj = new Date(b.booking_date + "T12:00:00");
               const formattedDate = dateObj.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
               const isToday = b.booking_date === new Date().toISOString().split("T")[0];
+              const isEditing = editingBooking?.id === b.id;
               const isCancelling = cancellingId === b.id;
+
               return (
-                <div key={b.id} style={{ background: "var(--warm-white)", border: "1px solid var(--border)", padding: "24px 20px", marginBottom: 12, position: "relative" }}>
-                  {isToday && (
-                    <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 2, background: "var(--gold)" }} />
-                  )}
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
+                <div key={b.id} style={{ background: "var(--warm-white)", border: "1px solid var(--border)", marginBottom: 12, position: "relative", overflow: "hidden" }}>
+                  {isToday && <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 2, background: "var(--gold)" }} />}
+
+                  {/* Booking summary row */}
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, padding: "20px" }}>
                     <div style={{ flex: 1 }}>
                       <div style={{ fontFamily: "'Cormorant Garamond',serif", fontSize: 20, fontWeight: 400, marginBottom: 4 }}>
                         {b.service_title || "Appointment"}
@@ -720,16 +762,93 @@ export function ClientPortal({ email, token }) {
                         {b.duration} min · £{b.price}
                       </div>
                     </div>
-                    <button
-                      onClick={() => handleCancel(b)}
-                      disabled={isCancelling}
-                      style={{ padding: "8px 16px", background: "none", color: "var(--red)", border: "1px solid var(--red)", cursor: "pointer", fontSize: 11, fontWeight: 600, letterSpacing: 0.5, textTransform: "uppercase", fontFamily: "'Outfit',sans-serif", flexShrink: 0, opacity: isCancelling ? 0.5 : 1 }}>
-                      {isCancelling ? "..." : "Cancel"}
-                    </button>
+                    {/* Action buttons */}
+                    <div style={{ display: "flex", flexDirection: "column", gap: 8, flexShrink: 0 }}>
+                      <button
+                        onClick={() => isEditing ? cancelEdit() : startEdit(b)}
+                        style={{ padding: "8px 16px", background: isEditing ? "var(--charcoal)" : "none", color: isEditing ? "var(--cream)" : "var(--charcoal)", border: "1px solid " + (isEditing ? "var(--charcoal)" : "var(--border)"), cursor: "pointer", fontSize: 11, fontWeight: 600, letterSpacing: 0.5, textTransform: "uppercase", fontFamily: "'Outfit',sans-serif" }}>
+                        {isEditing ? "Close" : "Edit"}
+                      </button>
+                      <button
+                        onClick={() => handleCancel(b)}
+                        disabled={isCancelling || isEditing}
+                        style={{ padding: "8px 16px", background: "none", color: "var(--red)", border: "1px solid var(--red)", cursor: "pointer", fontSize: 11, fontWeight: 600, letterSpacing: 0.5, textTransform: "uppercase", fontFamily: "'Outfit',sans-serif", opacity: isCancelling || isEditing ? 0.4 : 1 }}>
+                        {isCancelling ? "..." : "Cancel"}
+                      </button>
+                    </div>
                   </div>
+
+                  {/* Inline edit panel */}
+                  {isEditing && (
+                    <div style={{ borderTop: "1px solid var(--border)", padding: "20px", background: "var(--cream)" }}>
+                      <div style={{ fontSize: 12, fontWeight: 500, letterSpacing: "1.5px", textTransform: "uppercase", color: "var(--warm-gray)", marginBottom: 16 }}>
+                        Choose a new date &amp; time
+                      </div>
+
+                      {/* Calendar */}
+                      <div className="nn-cal" style={{ maxWidth: "100%", marginBottom: 16 }}>
+                        <div className="nn-cal-head">
+                          <button className="nn-cal-btn" onClick={() => { if (cM === 0) { setCM(11); setCY(cY - 1); } else setCM(cM - 1); }}>‹</button>
+                          <h3>{getMonthName(cM)} {cY}</h3>
+                          <button className="nn-cal-btn" onClick={() => { if (cM === 11) { setCM(0); setCY(cY + 1); } else setCM(cM + 1); }}>›</button>
+                        </div>
+                        <div className="nn-cal-weekdays">{["Mon","Tue","Wed","Thu","Fri","Sat","Sun"].map(d => <span key={d}>{d}</span>)}</div>
+                        <div className="nn-cal-days">
+                          {(() => {
+                            const first = (new Date(cY, cM, 1).getDay() + 6) % 7;
+                            const total = getDaysInMonth(cY, cM);
+                            const cells = [];
+                            for (let i = 0; i < first; i++) cells.push(<div className="nn-cal-day nil" key={"e" + i} />);
+                            for (let d = 1; d <= total; d++) {
+                              const isNow = d === now.getDate() && cM === now.getMonth() && cY === now.getFullYear();
+                              const past = new Date(cY, cM, d) < new Date(now.getFullYear(), now.getMonth(), now.getDate());
+                              const jsDay = new Date(cY, cM, d).getDay();
+                              const sun = jsDay === 0;
+                              const sel = editDate && editDate.day === d && editDate.month === cM && editDate.year === cY;
+                              cells.push(
+                                <button key={d}
+                                  className={"nn-cal-day" + (sel ? " on" : "") + (past || sun ? " off" : "") + (isNow ? " now" : "")}
+                                  onClick={() => { if (!past && !sun) { setEditDate({ day: d, month: cM, year: cY }); setEditTime(null); } }}
+                                  disabled={past || sun}>{d}</button>
+                              );
+                            }
+                            return cells;
+                          })()}
+                        </div>
+                      </div>
+
+                      {/* Time slots */}
+                      {editDate && (
+                        <div style={{ marginBottom: 16 }}>
+                          <div style={{ fontSize: 12, color: "var(--warm-gray)", marginBottom: 10, fontWeight: 300 }}>
+                            {getDayName(editDate.year, editDate.month, editDate.day)} {editDate.day} {getMonthName(editDate.month)}
+                          </div>
+                          {slotsLoading ? (
+                            <div style={{ color: "var(--warm-gray)", fontSize: 13, fontWeight: 300 }}>Loading times...</div>
+                          ) : slots.length === 0 ? (
+                            <div style={{ color: "var(--red)", fontSize: 13, fontWeight: 300 }}>No available slots on this day. Try another.</div>
+                          ) : (
+                            <div className="nn-times">
+                              {slots.map(t => (
+                                <button key={t} className={"nn-time" + (editTime === t ? " on" : "")} onClick={() => setEditTime(t)}>{t}</button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      <button
+                        onClick={handleReschedule}
+                        disabled={!editDate || !editTime || rescheduling}
+                        style={{ width: "100%", padding: "13px", background: "var(--charcoal)", color: "var(--cream)", border: "none", cursor: "pointer", fontFamily: "'Outfit',sans-serif", fontSize: 11, fontWeight: 600, letterSpacing: "2px", textTransform: "uppercase", opacity: editDate && editTime && !rescheduling ? 1 : 0.35 }}>
+                        {rescheduling ? "Saving..." : "Confirm New Time"}
+                      </button>
+                    </div>
+                  )}
                 </div>
               );
             })}
+
             <div style={{ marginTop: 32, textAlign: "center" }}>
               <a href="/" style={{ display: "inline-block", padding: "14px 36px", background: "var(--charcoal)", color: "var(--cream)", textDecoration: "none", fontFamily: "'Outfit',sans-serif", fontSize: 11, fontWeight: 500, letterSpacing: "2px", textTransform: "uppercase" }}>
                 Book Another Appointment
@@ -745,7 +864,6 @@ export function ClientPortal({ email, token }) {
     </div>
   );
 }
-
 
 // ============================================================
 // SITE
