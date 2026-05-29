@@ -720,6 +720,23 @@ export default function Dashboard({ onBack }) {
   const [staffBookServices, setStaffBookServices] = useState([]);
   const DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 
+  // Restore session from localStorage on mount
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("nn_session");
+      if (saved) {
+        const { session, prac: savedPrac } = JSON.parse(saved);
+        // Check token hasn't expired (Supabase tokens last 1 hour by default,
+        // but refresh tokens last much longer — we just attempt restore and
+        // let the first API call fail naturally if it has expired)
+        if (session?.access_token && savedPrac) {
+          setAuth(session);
+          setPrac(savedPrac);
+        }
+      }
+    } catch (e) { localStorage.removeItem("nn_session"); }
+  }, []);
+
   async function handleLogin(e) {
     e.preventDefault(); setLoginErr("");
     if (IS_DEMO) { setAuth({ access_token: "demo" }); setPrac(DEMO_PRACTITIONERS[0]); return; }
@@ -727,8 +744,10 @@ export default function Dashboard({ onBack }) {
       const session = await supabase.signIn(loginEmail, loginPass);
       setAuth(session);
       const pracs = await supabase.query("practitioners", { filters: "&user_id=eq." + session.user.id, token: session.access_token });
-      if (pracs.length > 0) setPrac(pracs[0]);
-      else setLoginErr("No practitioner account linked to this email. Please contact Kristen.");
+      if (pracs.length > 0) {
+        setPrac(pracs[0]);
+        localStorage.setItem("nn_session", JSON.stringify({ session, prac: pracs[0] }));
+      } else setLoginErr("No practitioner account linked to this email. Please contact Kristen.");
     } catch (e) { setLoginErr(e.message); }
   }
 
@@ -925,7 +944,7 @@ export default function Dashboard({ onBack }) {
           <div style={{ fontSize: 14, color: "var(--warm-gray)", fontWeight: 300, marginTop: 4 }}>{prac?.specialty}</div>
         </div>
         <div style={{ display: "flex", gap: 12 }}>
-          <button className="nn-btn-back" onClick={() => { setAuth(null); setPrac(null); }}>Sign Out</button>
+          <button className="nn-btn-back" onClick={() => { setAuth(null); setPrac(null); localStorage.removeItem("nn_session"); }}>Sign Out</button>
           <button className="nn-btn-back" onClick={onBack}>Website</button>
         </div>
       </div>
