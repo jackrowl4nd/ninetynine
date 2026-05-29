@@ -400,12 +400,11 @@ function fmtShortDate(date) {
 function WeekView({ bookings, loading, prac, token, onAddBooking, onStatusChange, onReschedule }) {
   const [weekStart, setWeekStart] = useState(() => getWeekStart(new Date()));
   const [sheet, setSheet] = useState(null);
-  const [sheetMode, setSheetMode] = useState("detail"); // "detail" | "edit"
+  const [sheetMode, setSheetMode] = useState("detail");
   const [nowTop, setNowTop] = useState(null);
   const [nowDayIdx, setNowDayIdx] = useState(null);
   const datePickerRef = useRef(null);
 
-  // Edit (reschedule) state
   const now = new Date();
   const [editCM, setEditCM] = useState(now.getMonth());
   const [editCY, setEditCY] = useState(now.getFullYear());
@@ -520,7 +519,8 @@ function WeekView({ bookings, loading, prac, token, onAddBooking, onStatusChange
       {loading ? (
         <div style={{ color: "var(--warm-gray)", padding: 40, textAlign: "center" }}>Loading bookings...</div>
       ) : (
-        style={{ overflowX: "auto", overflowY: "visible", WebkitOverflowScrolling: "touch", touchAction: "pan-x", border: "1px solid var(--border)", borderRadius: 2 }}
+        // ── scroll wrapper: pan-x for horizontal swipe, lets vertical pass through ──
+        <div style={{ overflowX: "auto", overflowY: "visible", WebkitOverflowScrolling: "touch", touchAction: "pan-x", border: "1px solid var(--border)", borderRadius: 2 }}>
           <div style={{ minWidth: 560, userSelect: "none" }}>
             {/* Day header row */}
             <div style={{ display: "grid", gridTemplateColumns: "48px repeat(7, 1fr)", borderBottom: "1px solid var(--border)", position: "sticky", top: 0, zIndex: 10 }}>
@@ -545,13 +545,13 @@ function WeekView({ bookings, loading, prac, token, onAddBooking, onStatusChange
                 ))}
               </div>
 
-              {/* Day columns */}
+              {/* Day columns — touch-action: pan-y lets vertical scroll pass to the page */}
               {days.map((d, di) => {
                 const ds = toDateStr(d);
                 const dayBookings = bookingsByDate[ds] || [];
                 const isToday = d.getTime() === today.getTime();
                 return (
-                  <div key={di} style={{ position: "relative", height: TOTAL_SLOTS * SLOT_H, borderLeft: "1px solid var(--border)", background: isToday ? "rgba(201,169,110,.04)" : "transparent", touchAction: "pan-y" }}
+                  <div key={di} style={{ position: "relative", height: TOTAL_SLOTS * SLOT_H, borderLeft: "1px solid var(--border)", background: isToday ? "rgba(201,169,110,.04)" : "transparent", touchAction: "pan-y" }}>
                     {Array.from({ length: HOUR_END - HOUR_START + 1 }, (_, i) => (
                       <div key={i} style={{ position: "absolute", top: i * 2 * SLOT_H, left: 0, right: 0, borderTop: "1px solid var(--border)", pointerEvents: "none" }} />
                     ))}
@@ -632,8 +632,6 @@ function WeekView({ bookings, loading, prac, token, onAddBooking, onStatusChange
                 <div style={{ fontSize: 13, color: "var(--warm-gray)", fontWeight: 300, marginBottom: 24 }}>
                   {sheet.client_name} · {sheet.service_title || sheet.service_name || "Service"}
                 </div>
-
-                {/* Calendar */}
                 <div className="nn-cal" style={{ maxWidth: "100%", marginBottom: 20 }}>
                   <div className="nn-cal-head">
                     <button className="nn-cal-btn" onClick={() => { if (editCM === 0) { setEditCM(11); setEditCY(editCY - 1); } else setEditCM(editCM - 1); }}>‹</button>
@@ -662,8 +660,6 @@ function WeekView({ bookings, loading, prac, token, onAddBooking, onStatusChange
                     })()}
                   </div>
                 </div>
-
-                {/* Time slots */}
                 {editDate && (
                   <div style={{ marginBottom: 20 }}>
                     <div style={{ fontSize: 13, color: "var(--warm-gray)", marginBottom: 12, fontWeight: 300 }}>
@@ -678,7 +674,6 @@ function WeekView({ bookings, loading, prac, token, onAddBooking, onStatusChange
                     )}
                   </div>
                 )}
-
                 <div style={{ display: "flex", gap: 10, marginTop: 8 }}>
                   <button onClick={() => setSheetMode("detail")}
                     style={{ flex: 1, padding: "14px", background: "none", border: "1.5px solid var(--border)", cursor: "pointer", fontFamily: "'Outfit',sans-serif", fontSize: 12, fontWeight: 500, letterSpacing: "1.5px", textTransform: "uppercase", color: "var(--charcoal)" }}>
@@ -941,7 +936,6 @@ export default function Dashboard({ onBack }) {
         <button className={"nn-dash-tab" + (tab === "schedule" ? " on" : "")} onClick={() => setTab("schedule")}>My Schedule</button>
       </div>
 
-      {/* ── BOOKINGS TAB ── */}
       {tab === "bookings" && (
         <div>
           {showStaffBooking ? (
@@ -966,7 +960,6 @@ export default function Dashboard({ onBack }) {
         </div>
       )}
 
-      {/* ── SERVICES TAB ── */}
       {tab === "services" && (
         <div style={{ maxWidth: 680 }}>
           <p style={{ fontSize: 14, color: "var(--warm-gray)", fontWeight: 300, marginBottom: 32, lineHeight: 1.7 }}>
@@ -1023,12 +1016,10 @@ export default function Dashboard({ onBack }) {
         </div>
       )}
 
-      {/* ── SCHEDULE TAB ── */}
       {tab === "schedule" && (
         <div style={{ maxWidth: 680 }}>
           <p style={{ fontSize: 14, color: "var(--warm-gray)", fontWeight: 300, marginBottom: 32, lineHeight: 1.7 }}>Set your working days and hours. Block out specific dates or time ranges for holidays or days off.</p>
 
-          {/* Weekly Hours */}
           <div style={{ fontFamily: "'Cormorant Garamond',serif", fontSize: 20, fontWeight: 400, marginBottom: 20, paddingBottom: 12, borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 12 }}>
             <span style={{ width: 20, height: 1.5, background: "var(--gold)", display: "inline-block" }} />Weekly Hours
           </div>
@@ -1054,7 +1045,6 @@ export default function Dashboard({ onBack }) {
             </div>
           ))}
 
-          {/* Booking Window */}
           <div style={{ fontFamily: "'Cormorant Garamond',serif", fontSize: 20, fontWeight: 400, margin: "40px 0 20px", paddingBottom: 12, borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 12 }}>
             <span style={{ width: 20, height: 1.5, background: "var(--gold)", display: "inline-block" }} />Booking Window
           </div>
@@ -1080,7 +1070,6 @@ export default function Dashboard({ onBack }) {
             <span style={{ fontSize: 14, color: "var(--warm-gray)", fontWeight: 300 }}>in advance</span>
           </div>
 
-          {/* Blocked Dates */}
           <div style={{ fontFamily: "'Cormorant Garamond',serif", fontSize: 20, fontWeight: 400, margin: "40px 0 20px", paddingBottom: 12, borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 12 }}>
             <span style={{ width: 20, height: 1.5, background: "var(--gold)", display: "inline-block" }} />Blocked Dates
           </div>
@@ -1126,7 +1115,6 @@ export default function Dashboard({ onBack }) {
             ))
           )}
 
-          {/* Slot Interval */}
           <div style={{ fontFamily: "'Cormorant Garamond',serif", fontSize: 20, fontWeight: 400, margin: "40px 0 20px", paddingBottom: 12, borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 12 }}>
             <span style={{ width: 20, height: 1.5, background: "var(--gold)", display: "inline-block" }} />Booking Slots
           </div>
@@ -1150,7 +1138,6 @@ export default function Dashboard({ onBack }) {
             ))}
           </div>
 
-          {/* Calendar Sync */}
           <div style={{ fontFamily: "'Cormorant Garamond',serif", fontSize: 20, fontWeight: 400, margin: "40px 0 20px", paddingBottom: 12, borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 12 }}>
             <span style={{ width: 20, height: 1.5, background: "var(--gold)", display: "inline-block" }} />Calendar Sync
           </div>
