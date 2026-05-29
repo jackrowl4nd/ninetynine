@@ -720,21 +720,43 @@ export default function Dashboard({ onBack }) {
   const [staffBookServices, setStaffBookServices] = useState([]);
   const DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 
-  // Restore session from localStorage on mount
+  // Restore session from localStorage on mount, refreshing the token if needed
   useEffect(() => {
-    try {
-      const saved = localStorage.getItem("nn_session");
-      if (saved) {
+    async function restoreSession() {
+      try {
+        const saved = localStorage.getItem("nn_session");
+        if (!saved) return;
         const { session, prac: savedPrac } = JSON.parse(saved);
-        // Check token hasn't expired (Supabase tokens last 1 hour by default,
-        // but refresh tokens last much longer — we just attempt restore and
-        // let the first API call fail naturally if it has expired)
-        if (session?.access_token && savedPrac) {
-          setAuth(session);
-          setPrac(savedPrac);
+        if (!session?.refresh_token || !savedPrac) {
+          localStorage.removeItem("nn_session"); return;
         }
+        // Always refresh the token on mount — access tokens expire after 1 hour
+        // but refresh tokens last much longer
+        const res = await fetch(
+          import.meta.env.VITE_SUPABASE_URL + "/auth/v1/token?grant_type=refresh_token",
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              apikey: import.meta.env.VITE_SUPABASE_ANON_KEY,
+            },
+            body: JSON.stringify({ refresh_token: session.refresh_token }),
+          }
+        );
+        if (!res.ok) {
+          // Refresh token also expired — clear and show login
+          localStorage.removeItem("nn_session"); return;
+        }
+        const newSession = await res.json();
+        // Update stored session with fresh tokens
+        localStorage.setItem("nn_session", JSON.stringify({ session: newSession, prac: savedPrac }));
+        setAuth(newSession);
+        setPrac(savedPrac);
+      } catch (e) {
+        localStorage.removeItem("nn_session");
       }
-    } catch (e) { localStorage.removeItem("nn_session"); }
+    }
+    restoreSession();
   }, []);
 
   async function handleLogin(e) {
