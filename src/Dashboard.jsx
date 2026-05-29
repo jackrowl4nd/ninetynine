@@ -520,7 +520,7 @@ function WeekView({ bookings, loading, prac, token, onAddBooking, onStatusChange
         <div style={{ color: "var(--warm-gray)", padding: 40, textAlign: "center" }}>Loading bookings...</div>
       ) : (
         // ── scroll wrapper: pan-x for horizontal swipe, lets vertical pass through ──
-        <div style={{ overflowX: "auto", overflowY: "visible", WebkitOverflowScrolling: "touch", touchAction: "pan-x", border: "1px solid var(--border)", borderRadius: 2 }}>
+        <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch", border: "1px solid var(--border)", borderRadius: 2 }}>
           <div style={{ minWidth: 560, userSelect: "none" }}>
             {/* Day header row */}
             <div style={{ display: "grid", gridTemplateColumns: "48px repeat(7, 1fr)", borderBottom: "1px solid var(--border)", position: "sticky", top: 0, zIndex: 10 }}>
