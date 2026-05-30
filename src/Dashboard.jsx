@@ -1092,24 +1092,20 @@ export default function Dashboard({ onBack }) {
             <span style={{ width: 20, height: 1.5, background: "var(--gold)", display: "inline-block" }} />Weekly Hours
           </div>
           {availability.map((row, i) => (
-            <div key={i} style={{ display: "flex", alignItems: "center", gap: 16, padding: "14px 20px", background: row.is_available ? "var(--warm-white)" : "transparent", border: "1.5px solid var(--border)", marginBottom: 8, opacity: row.is_available ? 1 : .5, transition: "all .2s" }}>
-              <button onClick={() => { updateAvail(i, "is_available", !row.is_available); setTimeout(() => saveAvailability(i), 100); }} style={{ width: 44, height: 24, borderRadius: 12, border: "none", cursor: "pointer", background: row.is_available ? "var(--charcoal)" : "var(--border)", position: "relative", transition: "background .2s", flexShrink: 0 }}>
-                <span style={{ position: "absolute", top: 3, left: row.is_available ? 23 : 3, width: 18, height: 18, borderRadius: "50%", background: "#fff", transition: "left .2s", display: "block" }} />
+            <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", background: row.is_available ? "var(--warm-white)" : "transparent", border: "1.5px solid var(--border)", marginBottom: 6, opacity: row.is_available ? 1 : .5, transition: "all .2s" }}>
+              <button onClick={() => { updateAvail(i, "is_available", !row.is_available); setTimeout(() => saveAvailability(i), 100); }} style={{ width: 40, height: 22, borderRadius: 11, border: "none", cursor: "pointer", background: row.is_available ? "var(--charcoal)" : "var(--border)", position: "relative", transition: "background .2s", flexShrink: 0 }}>
+                <span style={{ position: "absolute", top: 3, left: row.is_available ? 20 : 3, width: 16, height: 16, borderRadius: "50%", background: "#fff", transition: "left .2s", display: "block" }} />
               </button>
-              <div style={{ width: 96, fontSize: 14, fontWeight: row.is_available ? 500 : 300, color: row.is_available ? "var(--charcoal)" : "var(--warm-gray)" }}>{DAY_NAMES[i]}</div>
+              <div style={{ width: 80, fontSize: 13, fontWeight: row.is_available ? 500 : 300, color: row.is_available ? "var(--charcoal)" : "var(--warm-gray)", flexShrink: 0 }}>{DAY_NAMES[i]}</div>
               {row.is_available && (
-                <>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <span style={{ fontSize: 12, color: "var(--warm-gray)" }}>From</span>
-                    <input type="time" value={row.start_time} onChange={e => updateAvail(i, "start_time", e.target.value)} onBlur={() => saveAvailability(i)} style={{ padding: "8px 10px", border: "1.5px solid var(--border)", background: "var(--cream)", fontFamily: "'Outfit',sans-serif", fontSize: 13, outline: "none" }} />
-                  </div>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <span style={{ fontSize: 12, color: "var(--warm-gray)" }}>Until</span>
-                    <input type="time" value={row.end_time} onChange={e => updateAvail(i, "end_time", e.target.value)} onBlur={() => saveAvailability(i)} style={{ padding: "8px 10px", border: "1.5px solid var(--border)", background: "var(--cream)", fontFamily: "'Outfit',sans-serif", fontSize: 13, outline: "none" }} />
-                  </div>
-                </>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, flex: 1, minWidth: 0 }}>
+                  <span style={{ fontSize: 11, color: "var(--warm-gray)", flexShrink: 0 }}>From</span>
+                  <input type="time" value={row.start_time} onChange={e => updateAvail(i, "start_time", e.target.value)} onBlur={() => saveAvailability(i)} style={{ padding: "6px 8px", border: "1.5px solid var(--border)", background: "var(--cream)", fontFamily: "'Outfit',sans-serif", fontSize: 12, outline: "none", flex: 1, minWidth: 0 }} />
+                  <span style={{ fontSize: 11, color: "var(--warm-gray)", flexShrink: 0 }}>Until</span>
+                  <input type="time" value={row.end_time} onChange={e => updateAvail(i, "end_time", e.target.value)} onBlur={() => saveAvailability(i)} style={{ padding: "6px 8px", border: "1.5px solid var(--border)", background: "var(--cream)", fontFamily: "'Outfit',sans-serif", fontSize: 12, outline: "none", flex: 1, minWidth: 0 }} />
+                </div>
               )}
-              {!row.is_available && <span style={{ fontSize: 13, color: "var(--warm-gray)", fontWeight: 300 }}>Not working</span>}
+              {!row.is_available && <span style={{ fontSize: 12, color: "var(--warm-gray)", fontWeight: 300 }}>Not working</span>}
             </div>
           ))}
 
