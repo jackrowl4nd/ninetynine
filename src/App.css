@@ -673,14 +673,20 @@ body {
 .nn-dash-header {
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  align-items: flex-start;
   margin-bottom: 28px;
   padding-bottom: 16px;
   border-bottom: 1px solid var(--border);
-  flex-wrap: wrap;
   gap: 12px;
 }
 .nn-dash-greeting { font-family: 'Cormorant Garamond', serif; font-size: 28px; font-weight: 300; }
+.nn-dash-header-btns { display: flex; gap: 8px; flex-shrink: 0; }
+.nn-dash-header-btns .nn-btn-back {
+  padding: 8px 14px;
+  font-size: 10px;
+  letter-spacing: 1px;
+  white-space: nowrap;
+}
 .nn-dash-tabs { display: flex; gap: 4px; margin-bottom: 24px; }
 .nn-dash-tab {
   padding: 10px 12px;
