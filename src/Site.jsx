@@ -194,26 +194,75 @@ function isValidEmail(email) {
 // DEPOSIT PAYMENT SECTION
 // ============================================================
 
-function DepositPayment({ prac, clientName, clientEmail, onPaymentReady, onPaymentError }) {
+function DepositPayment({ prac, clientName, clientEmail, onPaymentReady }) {
   const cardElementRef = useRef(null);
   const prButtonRef = useRef(null);
   const [loadingStripe, setLoadingStripe] = useState(true);
   const [error, setError] = useState(null);
   const [prAvailable, setPrAvailable] = useState(false);
   const [showCard, setShowCard] = useState(false);
+  const stripeRef = useRef(null);
+
+  function createCardElement(s, container) {
+    const els = s.elements();
+    const card = els.create("card", {
+      hidePostalCode: true,
+      style: {
+        base: {
+          fontFamily: "'Outfit', sans-serif",
+          fontSize: "15px",
+          color: "#2C2825",
+          "::placeholder": { color: "#B8A08A" },
+        },
+        invalid: { color: "#C46E6E" },
+      },
+    });
+    card.mount(container);
+    card.on("change", ev => {
+      setError(ev.error ? ev.error.message : null);
+      if (ev.complete) {
+        onPaymentReady(() => confirmCardPayment(s, card));
+      } else {
+        onPaymentReady(null);
+      }
+    });
+    return card;
+  }
+
+  async function confirmCardPayment(stripeInstance, cardElement) {
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/create-payment-intent`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        practitioner_id: prac.id,
+        amount: prac.deposit_amount,
+        client_name: clientName,
+        client_email: clientEmail,
+      }),
+    });
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    const { error: stripeError, paymentIntent } = await stripeInstance.confirmCardPayment(
+      data.client_secret,
+      { payment_method: { card: cardElement, billing_details: { name: clientName, email: clientEmail } } }
+    );
+    if (stripeError) throw new Error(stripeError.message);
+    return { paymentIntentId: paymentIntent.id, depositAmount: prac.deposit_amount };
+  }
 
   useEffect(() => {
     const key = import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY;
     if (!key) { setError("Payment unavailable — no Stripe key configured."); setLoadingStripe(false); return; }
 
     loadStripe(key).then(async s => {
+      stripeRef.current = s;
       const depositPence = (prac.deposit_amount || 10) * 100;
 
-      // ── Try Payment Request (Apple Pay / Google Pay) ──
+      // Try Payment Request (Apple Pay / Google Pay)
       const pr = s.paymentRequest({
         country: "GB",
         currency: "gbp",
-        total: { label: `Deposit — ninety nine.`, amount: depositPence },
+        total: { label: "Deposit — ninety nine.", amount: depositPence },
         requestPayerName: true,
         requestPayerEmail: true,
       });
@@ -253,7 +302,9 @@ function DepositPayment({ prac, clientName, clientEmail, onPaymentReady, onPayme
             }
 
             e.complete("success");
-            onPaymentReady(() => Promise.resolve({ paymentIntentId: paymentIntent.id, depositAmount: prac.deposit_amount }));
+            const finalId = paymentIntent.id;
+            const finalAmt = prac.deposit_amount;
+            onPaymentReady(() => Promise.resolve({ paymentIntentId: finalId, depositAmount: finalAmt }));
           } catch (err) {
             setError(err.message);
             onPaymentReady(null);
@@ -276,30 +327,10 @@ function DepositPayment({ prac, clientName, clientEmail, onPaymentReady, onPayme
         // Fall back to card element
         setShowCard(true);
         setLoadingStripe(false);
-
         setTimeout(() => {
-          if (!cardElementRef.current) return;
-          const els = s.elements();
-          const card = els.create("card", {
-            style: {
-              base: {
-                fontFamily: "'Outfit', sans-serif",
-                fontSize: "15px",
-                color: "#2C2825",
-                "::placeholder": { color: "#B8A08A" },
-              },
-              invalid: { color: "#C46E6E" },
-            },
-          });
-          card.mount(cardElementRef.current);
-          card.on("change", ev => {
-            setError(ev.error ? ev.error.message : null);
-            if (ev.complete) {
-              onPaymentReady(() => confirmCardPayment(s, card));
-            } else {
-              onPaymentReady(null);
-            }
-          });
+          if (cardElementRef.current) {
+            createCardElement(s, cardElementRef.current);
+          }
         }, 50);
       }
     }).catch(() => {
@@ -307,27 +338,6 @@ function DepositPayment({ prac, clientName, clientEmail, onPaymentReady, onPayme
       setLoadingStripe(false);
     });
   }, []);
-
-  async function confirmCardPayment(stripeInstance, cardElement) {
-    const res = await fetch(`${SUPABASE_URL}/functions/v1/create-payment-intent`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        practitioner_id: prac.id,
-        amount: prac.deposit_amount,
-        client_name: clientName,
-        client_email: clientEmail,
-      }),
-    });
-    const data = await res.json();
-    if (data.error) throw new Error(data.error);
-    const { error: stripeError, paymentIntent } = await stripeInstance.confirmCardPayment(
-      data.client_secret,
-      { payment_method: { card: cardElement, billing_details: { name: clientName, email: clientEmail } } }
-    );
-    if (stripeError) throw new Error(stripeError.message);
-    return { paymentIntentId: paymentIntent.id, depositAmount: prac.deposit_amount };
-  }
 
   return (
     <div style={{ marginTop: 24, padding: "20px 24px", background: "var(--warm-white)", border: "1.5px solid var(--gold)" }}>
@@ -347,42 +357,31 @@ function DepositPayment({ prac, clientName, clientEmail, onPaymentReady, onPayme
       {prAvailable && (
         <div>
           <div ref={prButtonRef} style={{ marginBottom: 12 }} />
-          <div style={{ fontSize: 12, color: "var(--warm-gray)", fontWeight: 300, textAlign: "center", marginBottom: 12 }}>or pay by card</div>
-          <div
-            ref={cardElementRef}
-            style={{ padding: "13px 16px", border: "1.5px solid var(--border)", background: "var(--cream)", minHeight: 46, display: showCard ? "block" : "none" }}
-          />
-          {!showCard && (
+          <div style={{ fontSize: 12, color: "var(--warm-gray)", fontWeight: 300, textAlign: "center", marginBottom: 12 }}>or</div>
+          {!showCard ? (
             <button
               onClick={() => {
                 setShowCard(true);
-                setLoadingStripe(true);
-                loadStripe(import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY).then(s => {
-                  setLoadingStripe(false);
-                  setTimeout(() => {
-                    if (!cardElementRef.current) return;
-                    const els = s.elements();
-                    const card = els.create("card", {
-                      style: { base: { fontFamily: "'Outfit', sans-serif", fontSize: "15px", color: "#2C2825", "::placeholder": { color: "#B8A08A" } }, invalid: { color: "#C46E6E" } },
-                    });
-                    card.mount(cardElementRef.current);
-                    card.on("change", ev => {
-                      setError(ev.error ? ev.error.message : null);
-                      if (ev.complete) onPaymentReady(() => confirmCardPayment(s, card));
-                      else onPaymentReady(null);
-                    });
-                  }, 50);
-                });
+                setTimeout(() => {
+                  if (cardElementRef.current && stripeRef.current) {
+                    createCardElement(stripeRef.current, cardElementRef.current);
+                  }
+                }, 50);
               }}
               style={{ width: "100%", padding: "13px", background: "none", border: "1.5px solid var(--border)", cursor: "pointer", fontFamily: "'Outfit',sans-serif", fontSize: 13, fontWeight: 400, color: "var(--charcoal)" }}>
               Pay by card instead
             </button>
+          ) : (
+            <div
+              ref={cardElementRef}
+              style={{ padding: "13px 16px", border: "1.5px solid var(--border)", background: "var(--cream)", minHeight: 46 }}
+            />
           )}
         </div>
       )}
 
       {/* Card only fallback */}
-      {showCard && !prAvailable && (
+      {!prAvailable && showCard && (
         <div
           ref={cardElementRef}
           style={{ padding: "13px 16px", border: "1.5px solid var(--border)", background: "var(--cream)", minHeight: 46 }}
@@ -393,48 +392,6 @@ function DepositPayment({ prac, clientName, clientEmail, onPaymentReady, onPayme
     </div>
   );
 }
-  hidePostalCode: true,
-  style: {
-    base: {
-      fontFamily: "'Outfit', sans-serif",
-      fontSize: "15px",
-      color: "#2C2825",
-      "::placeholder": { color: "#B8A08A" },
-    },
-    invalid: { color: "#C46E6E" },
-  },
-});
-          card.mount(cardElementRef.current);
-          card.on("change", ev => {
-            setError(ev.error ? ev.error.message : null);
-            if (ev.complete) {
-              onPaymentReady(() => confirmCardPayment(s, card));
-            } else {
-              onPaymentReady(null);
-            }
-          });
-        }, 50);
-      }
-    }).catch(() => {
-      setError("Failed to load payment form. Please refresh and try again.");
-      setLoadingStripe(false);
-    });
-  }, []);
-
-  async function confirmCardPayment(stripeInstance, cardElement) {
-    const res = await fetch(`${SUPABASE_URL}/functions/v1/create-payment-intent`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        practitioner_id: prac.id,
-        amount: prac.deposit_amount,
-        client_name: clientName,
-        client_email: clientEmail,
-      }),
-    });
-    const data = await res.json();
-    if (data.error) throw new Error(data.error);
-    const { er
 
 // ============================================================
 // BOOKING FLOW
@@ -561,7 +518,6 @@ function BookingFlow({ practitioners, preselectedPrac, onClearPreselect, drawerM
       let depositAmount = null;
       let stripePaymentIntentId = null;
 
-      // Process deposit if required
       if (depositsEnabled && confirmPaymentFn) {
         try {
           const result = await confirmPaymentFn();
@@ -850,7 +806,6 @@ function BookingFlow({ practitioners, preselectedPrac, onClearPreselect, drawerM
                 clientName={clientName}
                 clientEmail={email}
                 onPaymentReady={(fn) => setConfirmPaymentFn(() => fn)}
-                onPaymentError={setPaymentError}
               />
             )}
             {paymentError && (
