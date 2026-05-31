@@ -249,6 +249,35 @@ function BookingFlow({ practitioners, preselectedPrac, onClearPreselect, drawerM
   const confirmStep = svc?.addon ? 5 : 4;
   const totalSteps = svc?.addon ? 5 : 4;
 
+  const [slotCounts, setSlotCounts] = useState({});
+
+useEffect(() => {
+  if (!prac || step !== dateStep) { setSlotCounts({}); return; }
+  const today = new Date();
+  const total = getDaysInMonth(cY, cM);
+  const days = [];
+  for (let d = 1; d <= total; d++) {
+    const dt = new Date(cY, cM, d);
+    if (dt < new Date(today.getFullYear(), today.getMonth(), today.getDate())) continue;
+    if (dt.getDay() === 0) continue;
+    days.push(d);
+  }
+  Promise.all(
+    days.map(d =>
+      supabase.rpc("get_available_slots", {
+        p_practitioner_id: prac.id,
+        p_date: dateStr(cY, cM, d),
+        p_duration: totalDuration || 30,
+        p_interval: prac.slot_interval || 30,
+      }).then(rows => ({ d, count: rows.length })).catch(() => ({ d, count: 0 }))
+    )
+  ).then(results => {
+    const map = {};
+    results.forEach(({ d, count }) => { map[dateStr(cY, cM, d)] = count; });
+    setSlotCounts(map);
+  });
+}, [prac, cM, cY, step, totalDuration]);
+
   const groups = [...new Set(customServices.filter(s => s.group_name).map(s => s.group_name))];
   const ungrouped = customServices.filter(s => !s.group_name);
 
@@ -421,10 +450,16 @@ function BookingFlow({ practitioners, preselectedPrac, onClearPreselect, drawerM
                     const jsDay = new Date(cY, cM, d).getDay();
                     const unavail = unavailableDays.has(jsDay);
                     const sel = date && date.day === d && date.month === cM && date.year === cY;
-                    cells.push(
-                      <button key={d} className={"nn-cal-day" + (sel ? " on" : "") + (past || unavail ? " off" : "") + (isNow ? " now" : "")}
-                        onClick={() => { if (!past && !unavail) { setDate({ day: d, month: cM, year: cY }); setTime(null); } }}
-                        disabled={past || unavail}>{d}</button>
+                    const ds = dateStr(cY, cM, d);
+const count = slotCounts[ds];
+const dotColor = past || sun ? null : count === undefined ? null : count === 0 ? "var(--red)" : count <= 3 ? "#C9963E" : "var(--green)";
+cells.push(
+  <button key={d} className={"nn-cal-day"+(sel?" on":"")+(past||sun?" off":"")+(isNow?" now":"")}
+    onClick={() => { if(!past&&!sun){ setDate({day:d,month:cM,year:cY}); setTime(null); }}} disabled={past||sun}>
+    {d}
+    {dotColor && <span style={{ display:"block", width:5, height:5, borderRadius:"50%", background:dotColor, margin:"2px auto 0" }}/>}
+  </button>
+);
                     );
                   }
                   return cells;
