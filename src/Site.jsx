@@ -281,6 +281,118 @@ function DepositPayment({ prac, clientName, clientEmail, onPaymentReady, onPayme
           if (!cardElementRef.current) return;
           const els = s.elements();
           const card = els.create("card", {
+            style: {
+              base: {
+                fontFamily: "'Outfit', sans-serif",
+                fontSize: "15px",
+                color: "#2C2825",
+                "::placeholder": { color: "#B8A08A" },
+              },
+              invalid: { color: "#C46E6E" },
+            },
+          });
+          card.mount(cardElementRef.current);
+          card.on("change", ev => {
+            setError(ev.error ? ev.error.message : null);
+            if (ev.complete) {
+              onPaymentReady(() => confirmCardPayment(s, card));
+            } else {
+              onPaymentReady(null);
+            }
+          });
+        }, 50);
+      }
+    }).catch(() => {
+      setError("Failed to load payment form. Please refresh and try again.");
+      setLoadingStripe(false);
+    });
+  }, []);
+
+  async function confirmCardPayment(stripeInstance, cardElement) {
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/create-payment-intent`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        practitioner_id: prac.id,
+        amount: prac.deposit_amount,
+        client_name: clientName,
+        client_email: clientEmail,
+      }),
+    });
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    const { error: stripeError, paymentIntent } = await stripeInstance.confirmCardPayment(
+      data.client_secret,
+      { payment_method: { card: cardElement, billing_details: { name: clientName, email: clientEmail } } }
+    );
+    if (stripeError) throw new Error(stripeError.message);
+    return { paymentIntentId: paymentIntent.id, depositAmount: prac.deposit_amount };
+  }
+
+  return (
+    <div style={{ marginTop: 24, padding: "20px 24px", background: "var(--warm-white)", border: "1.5px solid var(--gold)" }}>
+      <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: "2px", textTransform: "uppercase", color: "var(--gold)", marginBottom: 4 }}>
+        £{prac.deposit_amount} Deposit Required
+      </div>
+      <div style={{ fontSize: 13, color: "var(--warm-gray)", fontWeight: 300, lineHeight: 1.6, marginBottom: 16 }}>
+        A deposit is required to secure your appointment. This will be deducted from your total on the day.
+        Free cancellation up to 48 hours before your appointment.
+      </div>
+
+      {loadingStripe && (
+        <div style={{ fontSize: 13, color: "var(--warm-gray)", fontWeight: 300 }}>Loading payment options...</div>
+      )}
+
+      {/* Apple Pay / Google Pay button */}
+      {prAvailable && (
+        <div>
+          <div ref={prButtonRef} style={{ marginBottom: 12 }} />
+          <div style={{ fontSize: 12, color: "var(--warm-gray)", fontWeight: 300, textAlign: "center", marginBottom: 12 }}>or pay by card</div>
+          <div
+            ref={cardElementRef}
+            style={{ padding: "13px 16px", border: "1.5px solid var(--border)", background: "var(--cream)", minHeight: 46, display: showCard ? "block" : "none" }}
+          />
+          {!showCard && (
+            <button
+              onClick={() => {
+                setShowCard(true);
+                setLoadingStripe(true);
+                loadStripe(import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY).then(s => {
+                  setLoadingStripe(false);
+                  setTimeout(() => {
+                    if (!cardElementRef.current) return;
+                    const els = s.elements();
+                    const card = els.create("card", {
+                      style: { base: { fontFamily: "'Outfit', sans-serif", fontSize: "15px", color: "#2C2825", "::placeholder": { color: "#B8A08A" } }, invalid: { color: "#C46E6E" } },
+                    });
+                    card.mount(cardElementRef.current);
+                    card.on("change", ev => {
+                      setError(ev.error ? ev.error.message : null);
+                      if (ev.complete) onPaymentReady(() => confirmCardPayment(s, card));
+                      else onPaymentReady(null);
+                    });
+                  }, 50);
+                });
+              }}
+              style={{ width: "100%", padding: "13px", background: "none", border: "1.5px solid var(--border)", cursor: "pointer", fontFamily: "'Outfit',sans-serif", fontSize: 13, fontWeight: 400, color: "var(--charcoal)" }}>
+              Pay by card instead
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Card only fallback */}
+      {showCard && !prAvailable && (
+        <div
+          ref={cardElementRef}
+          style={{ padding: "13px 16px", border: "1.5px solid var(--border)", background: "var(--cream)", minHeight: 46 }}
+        />
+      )}
+
+      {error && <div style={{ fontSize: 12, color: "var(--red)", marginTop: 8, fontWeight: 300 }}>{error}</div>}
+    </div>
+  );
+}
   hidePostalCode: true,
   style: {
     base: {
