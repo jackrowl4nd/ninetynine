@@ -875,13 +875,10 @@ export default function Dashboard({ onBack }) {
         break_start: row.break_start || null,
         break_duration: row.break_duration ? parseInt(row.break_duration) : null,
       };
-      await fetch(SUPABASE_URL + "/rest/v1/availability", {
-  method: "POST",
-  headers: {
-    ...supabase.headers(auth.access_token),
-    Prefer: "resolution=merge-duplicates,return=representation",
-  },
-  body: JSON.stringify({ practitioner_id: prac.id, day_of_week: day, ...payload }),
+      await fetch(SUPABASE_URL + "/rest/v1/availability?practitioner_id=eq." + prac.id + "&day_of_week=eq." + day, {
+  method: "PATCH",
+  headers: { ...supabase.headers(auth.access_token), Prefer: "return=representation" },
+  body: JSON.stringify(payload),
 });
     } catch (e) { console.error(e); }
   }
