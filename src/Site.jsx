@@ -1,5 +1,5 @@
 // src/Site.jsx — Public-facing website
-// Nav, Hero, Divider, ServicesList, TeamSection, BookingFlow, CancelPage
+// Nav, Hero, Divider, ServicesList, TeamSection, BookingFlow, CancelPage, ClientPortal, BookingSuccess
 
 import React, { useState, useEffect, useRef } from "react";
 import { supabase, IS_DEMO, SUPABASE_URL } from "./supabase.js";
@@ -14,24 +14,6 @@ import {
   useAvailableSlots,
   ServiceGroup,
 } from "./shared.jsx";
-
-// ============================================================
-// STRIPE LOADER
-// ============================================================
-
-let stripePromise = null;
-function loadStripe(publishableKey) {
-  if (!stripePromise) {
-    stripePromise = new Promise((resolve) => {
-      if (window.Stripe) { resolve(window.Stripe(publishableKey)); return; }
-      const script = document.createElement("script");
-      script.src = "https://js.stripe.com/v3/";
-      script.onload = () => resolve(window.Stripe(publishableKey));
-      document.head.appendChild(script);
-    });
-  }
-  return stripePromise;
-}
 
 // ============================================================
 // NAV
@@ -191,215 +173,6 @@ function isValidEmail(email) {
 }
 
 // ============================================================
-// DEPOSIT PAYMENT SECTION
-// ============================================================
-
-function DepositPayment({ prac, clientName, clientEmail, onPaymentReady }) {
-  const cardElementRef = useRef(null);
-  const prButtonRef = useRef(null);
-  const [loadingStripe, setLoadingStripe] = useState(true);
-  const [error, setError] = useState(null);
-  const [prAvailable, setPrAvailable] = useState(false);
-  const [showCard, setShowCard] = useState(false);
-  const stripeRef = useRef(null);
-
-  function createCardElement(s, container) {
-    const els = s.elements();
-    const card = els.create("card", {
-      hidePostalCode: true,
-      style: {
-        base: {
-          fontFamily: "'Outfit', sans-serif",
-          fontSize: "15px",
-          color: "#2C2825",
-          "::placeholder": { color: "#B8A08A" },
-        },
-        invalid: { color: "#C46E6E" },
-      },
-    });
-    card.mount(container);
-    card.on("change", ev => {
-      setError(ev.error ? ev.error.message : null);
-      if (ev.complete) {
-        onPaymentReady(() => confirmCardPayment(s, card));
-      } else {
-        onPaymentReady(null);
-      }
-    });
-    return card;
-  }
-
-  async function confirmCardPayment(stripeInstance, cardElement) {
-    const res = await fetch(`${SUPABASE_URL}/functions/v1/create-payment-intent`, {
-  method: "POST",
-  headers: {
-    "Content-Type": "application/json",
-    "Authorization": `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
-  },
-      body: JSON.stringify({
-        practitioner_id: prac.id,
-        amount: prac.deposit_amount,
-        client_name: clientName,
-        client_email: clientEmail,
-      }),
-    });
-    const data = await res.json();
-    if (data.error) throw new Error(data.error);
-    const { error: stripeError, paymentIntent } = await stripeInstance.confirmCardPayment(
-      data.client_secret,
-      { payment_method: { card: cardElement, billing_details: { name: clientName, email: clientEmail } } }
-    );
-    if (stripeError) throw new Error(stripeError.message);
-    return { paymentIntentId: paymentIntent.id, depositAmount: prac.deposit_amount };
-  }
-
-  useEffect(() => {
-    const key = import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY;
-    if (!key) { setError("Payment unavailable — no Stripe key configured."); setLoadingStripe(false); return; }
-
-    loadStripe(key).then(async s => {
-      stripeRef.current = s;
-      const depositPence = (prac.deposit_amount || 10) * 100;
-
-      // Try Payment Request (Apple Pay / Google Pay)
-      const pr = s.paymentRequest({
-        country: "GB",
-        currency: "gbp",
-        total: { label: "Deposit — ninety nine.", amount: depositPence },
-        requestPayerName: true,
-        requestPayerEmail: true,
-      });
-
-      const canMake = await pr.canMakePayment();
-
-      if (canMake) {
-        setPrAvailable(true);
-        setLoadingStripe(false);
-
-        pr.on("paymentmethod", async (e) => {
-          try {
-            const res = await fetch(`${SUPABASE_URL}/functions/v1/create-payment-intent`, {
-  method: "POST",
-  headers: {
-    "Content-Type": "application/json",
-    "Authorization": `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
-  },
-              body: JSON.stringify({
-                practitioner_id: prac.id,
-                amount: prac.deposit_amount,
-                client_name: clientName,
-                client_email: clientEmail,
-              }),
-            });
-            const data = await res.json();
-            if (data.error) { e.complete("fail"); throw new Error(data.error); }
-
-            const { error: confirmError, paymentIntent } = await s.confirmCardPayment(
-              data.client_secret,
-              { payment_method: e.paymentMethod.id },
-              { handleActions: false }
-            );
-
-            if (confirmError) { e.complete("fail"); throw new Error(confirmError.message); }
-
-            if (paymentIntent.status === "requires_action") {
-              const { error: actionError } = await s.confirmCardPayment(data.client_secret);
-              if (actionError) { e.complete("fail"); throw new Error(actionError.message); }
-            }
-
-            e.complete("success");
-            const finalId = paymentIntent.id;
-            const finalAmt = prac.deposit_amount;
-            onPaymentReady(() => Promise.resolve({ paymentIntentId: finalId, depositAmount: finalAmt }));
-          } catch (err) {
-            setError(err.message);
-            onPaymentReady(null);
-          }
-        });
-
-        // Mount the Payment Request Button
-        setTimeout(() => {
-          if (prButtonRef.current) {
-            const els = s.elements();
-            const button = els.create("paymentRequestButton", {
-              paymentRequest: pr,
-              style: { paymentRequestButton: { type: "default", theme: "dark", height: "48px" } },
-            });
-            button.mount(prButtonRef.current);
-          }
-        }, 50);
-
-      } else {
-        // Fall back to card element
-        setShowCard(true);
-        setLoadingStripe(false);
-        setTimeout(() => {
-          if (cardElementRef.current) {
-            createCardElement(s, cardElementRef.current);
-          }
-        }, 50);
-      }
-    }).catch(() => {
-      setError("Failed to load payment form. Please refresh and try again.");
-      setLoadingStripe(false);
-    });
-  }, []);
-
-  return (
-    <div style={{ marginTop: 24, padding: "20px 24px", background: "var(--warm-white)", border: "1.5px solid var(--gold)" }}>
-      <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: "2px", textTransform: "uppercase", color: "var(--gold)", marginBottom: 4 }}>
-        £{prac.deposit_amount} Deposit Required
-      </div>
-      <div style={{ fontSize: 13, color: "var(--warm-gray)", fontWeight: 300, lineHeight: 1.6, marginBottom: 16 }}>
-        A deposit is required to secure your appointment. This will be deducted from your total on the day.
-        Free cancellation up to 48 hours before your appointment.
-      </div>
-
-      {loadingStripe && (
-        <div style={{ fontSize: 13, color: "var(--warm-gray)", fontWeight: 300 }}>Loading payment options...</div>
-      )}
-
-      {/* Apple Pay / Google Pay button */}
-      {prAvailable && (
-        <div>
-          <div ref={prButtonRef} style={{ marginBottom: 12 }} />
-          <div style={{ fontSize: 12, color: "var(--warm-gray)", fontWeight: 300, textAlign: "center", marginBottom: 12 }}>or</div>
-          {!showCard ? (
-            <button
-              onClick={() => {
-                setShowCard(true);
-                setTimeout(() => {
-                  if (cardElementRef.current && stripeRef.current) {
-                    createCardElement(stripeRef.current, cardElementRef.current);
-                  }
-                }, 50);
-              }}
-              style={{ width: "100%", padding: "13px", background: "none", border: "1.5px solid var(--border)", cursor: "pointer", fontFamily: "'Outfit',sans-serif", fontSize: 13, fontWeight: 400, color: "var(--charcoal)" }}>
-              Pay by card instead
-            </button>
-          ) : (
-            <div
-              ref={cardElementRef}
-              style={{ padding: "13px 16px", border: "1.5px solid var(--border)", background: "var(--cream)", minHeight: 46 }}
-            />
-          )}
-        </div>
-      )}
-
-      {/* Card only fallback */}
-      {!prAvailable && showCard && (
-        <div
-          ref={cardElementRef}
-          style={{ padding: "13px 16px", border: "1.5px solid var(--border)", background: "var(--cream)", minHeight: 46 }}
-        />
-      )}
-
-      {error && <div style={{ fontSize: 12, color: "var(--red)", marginTop: 8, fontWeight: 300 }}>{error}</div>}
-    </div>
-  );
-}
-
-// ============================================================
 // BOOKING FLOW
 // ============================================================
 
@@ -418,8 +191,6 @@ function BookingFlow({ practitioners, preselectedPrac, onClearPreselect, drawerM
   const [emailTouched, setEmailTouched] = useState(false);
   const [customServices, setCustomServices] = useState([]);
   const [loadingServices, setLoadingServices] = useState(false);
-  const [confirmPaymentFn, setConfirmPaymentFn] = useState(null);
-  const [paymentError, setPaymentError] = useState(null);
   const now = new Date();
   const [cM, setCM] = useState(now.getMonth());
   const [cY, setCY] = useState(now.getFullYear());
@@ -427,8 +198,7 @@ function BookingFlow({ practitioners, preselectedPrac, onClearPreselect, drawerM
 
   const emailValid = isValidEmail(email);
   const depositsEnabled = !IS_DEMO && prac?.deposits_enabled && prac?.stripe_account_id;
-  const canConfirm = clientName.trim() && phone.trim() && emailValid && !saving &&
-    (!depositsEnabled || confirmPaymentFn !== null);
+  const canConfirm = clientName.trim() && phone.trim() && emailValid && !saving;
 
   useEffect(() => {
     if (preselectedPrac) {
@@ -518,26 +288,39 @@ function BookingFlow({ practitioners, preselectedPrac, onClearPreselect, drawerM
     if (!canConfirm) return;
     if (IS_DEMO) { setDone(true); return; }
     setSaving(true);
-    setPaymentError(null);
     try {
-      let depositPaid = false;
-      let depositAmount = null;
-      let stripePaymentIntentId = null;
+      const serviceTitle = svc.title + (addon ? " + " + addon.title : "");
 
-      if (depositsEnabled && confirmPaymentFn) {
-        try {
-          const result = await confirmPaymentFn();
-          depositPaid = true;
-          depositAmount = result.depositAmount;
-          stripePaymentIntentId = result.paymentIntentId;
-        } catch (e) {
-          setPaymentError(e.message || "Payment failed. Please check your card details and try again.");
-          setSaving(false);
-          return;
-        }
+      // If deposits enabled — redirect to Stripe Checkout
+      if (depositsEnabled) {
+        const res = await fetch(`${SUPABASE_URL}/functions/v1/create-checkout-session`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+          },
+          body: JSON.stringify({
+            practitioner_id: prac.id,
+            service_id: svc.id,
+            service_title: serviceTitle,
+            client_name: clientName.trim(),
+            client_phone: phone.trim(),
+            client_email: email.trim(),
+            booking_date: dateStr(date.year, date.month, date.day),
+            booking_time: time + ":00",
+            duration: totalDuration,
+            price: totalPrice,
+            notes: addon ? "Add-on: " + addon.title : "",
+          }),
+        });
+        const data = await res.json();
+        if (data.error) throw new Error(data.error);
+        // Redirect to Stripe Checkout
+        window.location.href = data.url;
+        return;
       }
 
-      const serviceTitle = svc.title + (addon ? " + " + addon.title : "");
+      // No deposit — create booking directly
       await supabase.insert("bookings", {
         practitioner_id: prac.id,
         service_id: svc.id,
@@ -550,16 +333,14 @@ function BookingFlow({ practitioners, preselectedPrac, onClearPreselect, drawerM
         duration: totalDuration,
         price: totalPrice,
         notes: addon ? "Add-on: " + addon.title : "",
-        deposit_paid: depositPaid,
-        deposit_amount: depositAmount,
-        stripe_payment_intent_id: stripePaymentIntentId,
+        deposit_paid: false,
       });
       setDone(true);
     } catch (e) {
       console.error(e);
       alert("Sorry, there was an error creating your booking. Please try again.");
+      setSaving(false);
     }
-    setSaving(false);
   }
 
   const H3 = ({ children }) => (
@@ -598,11 +379,6 @@ function BookingFlow({ practitioners, preselectedPrac, onClearPreselect, drawerM
           {clientName}, your appointment with {prac.name} is confirmed for {getDayName(date.year, date.month, date.day)} {date.day} {getMonthName(date.month)} at {time}.<br />
           A confirmation has been sent to {email}. See you at 99 Banks Road!
         </p>
-        {depositsEnabled && (
-          <p style={{ textAlign: "center", color: "var(--warm-gray)", fontSize: 13, fontWeight: 300, lineHeight: 1.6, marginTop: 12 }}>
-            Your £{prac.deposit_amount} deposit has been taken and will be deducted from your total on the day.
-          </p>
-        )}
         {drawerMode && onClose && (
           <div style={{ textAlign: "center", marginTop: 32 }}>
             <button className="nn-btn nn-btn-dark" onClick={onClose}>Close</button>
@@ -806,26 +582,157 @@ function BookingFlow({ practitioners, preselectedPrac, onClearPreselect, drawerM
                 </div>
               </div>
             </div>
-            {depositsEnabled && clientName && emailValid && (
-              <DepositPayment
-                prac={prac}
-                clientName={clientName}
-                clientEmail={email}
-                onPaymentReady={(fn) => setConfirmPaymentFn(() => fn)}
-              />
-            )}
-            {paymentError && (
-              <div style={{ marginTop: 12, padding: "12px 16px", background: "rgba(196,110,110,.08)", border: "1px solid rgba(196,110,110,.2)", fontSize: 13, color: "var(--red)", fontWeight: 300 }}>
-                {paymentError}
+            {depositsEnabled && (
+              <div style={{ marginTop: 20, padding: "16px 20px", background: "var(--warm-white)", border: "1px solid var(--border)", fontSize: 13, color: "var(--warm-gray)", fontWeight: 300, lineHeight: 1.6 }}>
+                A £{prac.deposit_amount} deposit is required to secure your appointment. You'll be taken to our secure payment page. Free cancellation up to 48 hours before your appointment.
               </div>
             )}
           </div>
           <div className="nn-booking-nav">
             <button className="nn-btn-back" onClick={() => setStep(dateStep)}>Back</button>
             <button className="nn-btn nn-btn-gold" onClick={handleConfirm} disabled={!canConfirm} style={{ opacity: canConfirm ? 1 : .35 }}>
-              {saving ? (depositsEnabled ? "Processing payment..." : "Booking...") : depositsEnabled ? `Pay £${prac.deposit_amount} & Confirm` : "Confirm Booking"}
+              {saving
+                ? (depositsEnabled ? "Redirecting to payment..." : "Booking...")
+                : depositsEnabled
+                  ? `Pay £${prac.deposit_amount} & Confirm`
+                  : "Confirm Booking"
+              }
             </button>
           </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============================================================
+// BOOKING SUCCESS PAGE — /booking-success?session_id=xxx&...
+// Called by Stripe Checkout on successful payment
+// Creates the booking and shows confirmation
+// ============================================================
+
+export function BookingSuccess({ params }) {
+  const [status, setStatus] = useState("loading");
+  const [bookingData, setBookingData] = useState(null);
+
+  useEffect(() => {
+    const sessionId = params.get("session_id");
+    const practitionerId = params.get("practitioner_id");
+    const serviceId = params.get("service_id");
+    const serviceTitle = params.get("service_title");
+    const clientName = params.get("client_name");
+    const clientPhone = params.get("client_phone");
+    const clientEmail = params.get("client_email");
+    const bookingDate = params.get("booking_date");
+    const bookingTime = params.get("booking_time");
+    const duration = parseInt(params.get("duration") || "0");
+    const price = parseFloat(params.get("price") || "0");
+    const depositAmount = parseInt(params.get("deposit_amount") || "0");
+    const notes = params.get("notes") || "";
+
+    if (!sessionId || !practitionerId || !clientName) {
+      setStatus("invalid");
+      return;
+    }
+
+    // Verify Stripe session and create booking via Edge Function
+    async function createBooking() {
+      try {
+        // Verify the Stripe session was paid
+        const verifyRes = await fetch(`${SUPABASE_URL}/functions/v1/verify-checkout-session`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+          },
+          body: JSON.stringify({ session_id: sessionId }),
+        });
+        const verifyData = await verifyRes.json();
+
+        if (verifyData.error) throw new Error(verifyData.error);
+        if (verifyData.payment_status !== "paid") throw new Error("Payment not completed");
+
+        // Create the booking
+        await supabase.insert("bookings", {
+          practitioner_id: practitionerId,
+          service_id: serviceId,
+          service_title: serviceTitle,
+          client_name: clientName,
+          client_phone: clientPhone,
+          client_email: clientEmail,
+          booking_date: bookingDate,
+          booking_time: bookingTime,
+          duration,
+          price,
+          notes,
+          deposit_paid: true,
+          deposit_amount: depositAmount,
+          stripe_payment_intent_id: verifyData.payment_intent,
+        });
+
+        setBookingData({ clientName, serviceTitle, bookingDate, bookingTime, clientEmail, depositAmount });
+        setStatus("done");
+      } catch (e) {
+        console.error(e);
+        setStatus("error");
+      }
+    }
+
+    createBooking();
+  }, []);
+
+  const formattedDate = bookingData?.bookingDate
+    ? new Date(bookingData.bookingDate + "T12:00:00").toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" })
+    : "";
+  const formattedTime = bookingData?.bookingTime?.slice(0, 5) || "";
+
+  return (
+    <div style={{ minHeight: "100vh", background: "var(--cream)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "40px 24px" }}>
+      <div style={{ fontFamily: "'Cormorant Garamond',serif", fontSize: 26, fontStyle: "italic", fontWeight: 300, marginBottom: 8 }}>ninety nine.</div>
+      <div style={{ width: 36, height: 1.5, background: "var(--gold)", margin: "0 auto 40px" }} />
+
+      {status === "loading" && (
+        <div style={{ textAlign: "center" }}>
+          <div style={{ color: "var(--warm-gray)", fontSize: 14, fontWeight: 300, marginBottom: 8 }}>Confirming your booking...</div>
+          <div style={{ fontSize: 12, color: "var(--taupe)", fontWeight: 300 }}>Please don't close this page</div>
+        </div>
+      )}
+
+      {status === "done" && bookingData && (
+        <div style={{ maxWidth: 480, width: "100%", textAlign: "center" }}>
+          <div className="nn-success-icon">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="20 6 9 17 4 12" />
+            </svg>
+          </div>
+          <h2 style={{ fontFamily: "'Cormorant Garamond',serif", fontSize: 32, fontWeight: 300, marginBottom: 12 }}>You're all booked</h2>
+          <p style={{ color: "var(--warm-gray)", fontSize: 14, fontWeight: 300, lineHeight: 1.7, marginBottom: 32 }}>
+            {bookingData.clientName}, your {bookingData.serviceTitle} is confirmed for {formattedDate} at {formattedTime}.<br />
+            A confirmation has been sent to {bookingData.clientEmail}.<br />
+            Your £{bookingData.depositAmount} deposit has been taken and will be deducted from your total on the day.<br />
+            See you at 99 Banks Road!
+          </p>
+          <a href="/" style={{ display: "inline-block", padding: "14px 36px", background: "var(--charcoal)", color: "var(--cream)", textDecoration: "none", fontFamily: "'Outfit',sans-serif", fontSize: 11, fontWeight: 500, letterSpacing: "2px", textTransform: "uppercase" }}>
+            Back to Website
+          </a>
+        </div>
+      )}
+
+      {status === "invalid" && (
+        <div style={{ textAlign: "center", maxWidth: 380 }}>
+          <div style={{ fontFamily: "'Cormorant Garamond',serif", fontSize: 26, fontWeight: 300, marginBottom: 14 }}>Invalid link</div>
+          <p style={{ color: "var(--warm-gray)", fontSize: 14, fontWeight: 300, lineHeight: 1.7 }}>
+            This booking link is not valid. Please DM us on Instagram <a href="https://www.instagram.com/ninetyninebyk/" style={{ color: "var(--gold)" }}>@ninetyninebyk</a>.
+          </p>
+        </div>
+      )}
+
+      {status === "error" && (
+        <div style={{ textAlign: "center", maxWidth: 380 }}>
+          <div style={{ fontFamily: "'Cormorant Garamond',serif", fontSize: 26, fontWeight: 300, marginBottom: 14 }}>Something went wrong</div>
+          <p style={{ color: "var(--warm-gray)", fontSize: 14, fontWeight: 300, lineHeight: 1.7 }}>
+            Your payment was taken but we couldn't confirm the booking. Please DM us on Instagram <a href="https://www.instagram.com/ninetyninebyk/" style={{ color: "var(--gold)" }}>@ninetyninebyk</a> with your name and we'll sort it immediately.
+          </p>
         </div>
       )}
     </div>
@@ -1018,9 +925,7 @@ export function ClientPortal({ email, token }) {
           <div style={{ fontSize: 13, color: "var(--warm-gray)", fontWeight: 300 }}>{email}</div>
         </div>
 
-        {status === "loading" && (
-          <div style={{ textAlign: "center", color: "var(--warm-gray)", fontSize: 14, fontWeight: 300 }}>Loading your bookings...</div>
-        )}
+        {status === "loading" && <div style={{ textAlign: "center", color: "var(--warm-gray)", fontSize: 14, fontWeight: 300 }}>Loading your bookings...</div>}
         {status === "invalid" && (
           <div style={{ textAlign: "center" }}>
             <div style={{ fontFamily: "'Cormorant Garamond',serif", fontSize: 24, fontWeight: 300, marginBottom: 12 }}>Link not valid</div>
@@ -1041,9 +946,7 @@ export function ClientPortal({ email, token }) {
         {status === "ready" && bookings.length === 0 && (
           <div style={{ textAlign: "center", padding: "32px 0" }}>
             <div style={{ fontFamily: "'Cormorant Garamond',serif", fontSize: 24, fontWeight: 300, marginBottom: 12 }}>No upcoming bookings</div>
-            <p style={{ color: "var(--warm-gray)", fontSize: 14, fontWeight: 300, lineHeight: 1.7, marginBottom: 32 }}>
-              You don't have any upcoming appointments. Ready to book again?
-            </p>
+            <p style={{ color: "var(--warm-gray)", fontSize: 14, fontWeight: 300, lineHeight: 1.7, marginBottom: 32 }}>You don't have any upcoming appointments. Ready to book again?</p>
             <a href="/" style={{ display: "inline-block", padding: "14px 36px", background: "var(--charcoal)", color: "var(--cream)", textDecoration: "none", fontFamily: "'Outfit',sans-serif", fontSize: 11, fontWeight: 500, letterSpacing: "2px", textTransform: "uppercase" }}>
               Book an Appointment
             </a>
@@ -1067,17 +970,13 @@ export function ClientPortal({ email, token }) {
                   {isToday && <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 2, background: "var(--gold)" }} />}
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, padding: "20px" }}>
                     <div style={{ flex: 1 }}>
-                      <div style={{ fontFamily: "'Cormorant Garamond',serif", fontSize: 20, fontWeight: 400, marginBottom: 4 }}>
-                        {b.service_title || "Appointment"}
-                      </div>
+                      <div style={{ fontFamily: "'Cormorant Garamond',serif", fontSize: 20, fontWeight: 400, marginBottom: 4 }}>{b.service_title || "Appointment"}</div>
                       <div style={{ fontSize: 13, color: "var(--warm-gray)", fontWeight: 300, marginBottom: 2 }}>with {b.practitioner?.name}</div>
                       <div style={{ fontSize: 13, fontWeight: 500, marginTop: 8, color: isToday ? "var(--gold)" : "var(--charcoal)" }}>
                         {isToday ? "Today" : formattedDate} at {b.booking_time?.slice(0, 5)}
                       </div>
                       <div style={{ fontSize: 12, color: "var(--warm-gray)", fontWeight: 300, marginTop: 2 }}>{b.duration} min · £{b.price}</div>
-                      {b.deposit_paid && (
-                        <div style={{ fontSize: 11, color: "var(--green)", fontWeight: 500, marginTop: 4 }}>£{b.deposit_amount} deposit paid</div>
-                      )}
+                      {b.deposit_paid && <div style={{ fontSize: 11, color: "var(--green)", fontWeight: 500, marginTop: 4 }}>£{b.deposit_amount} deposit paid</div>}
                     </div>
                     <div style={{ display: "flex", flexDirection: "column", gap: 8, flexShrink: 0 }}>
                       <button onClick={() => isEditing ? cancelEdit() : startEdit(b)}
@@ -1092,9 +991,7 @@ export function ClientPortal({ email, token }) {
                   </div>
                   {isEditing && (
                     <div style={{ borderTop: "1px solid var(--border)", padding: "20px", background: "var(--cream)" }}>
-                      <div style={{ fontSize: 12, fontWeight: 500, letterSpacing: "1.5px", textTransform: "uppercase", color: "var(--warm-gray)", marginBottom: 16 }}>
-                        Choose a new date &amp; time
-                      </div>
+                      <div style={{ fontSize: 12, fontWeight: 500, letterSpacing: "1.5px", textTransform: "uppercase", color: "var(--warm-gray)", marginBottom: 16 }}>Choose a new date &amp; time</div>
                       <div className="nn-cal" style={{ maxWidth: "100%", marginBottom: 16 }}>
                         <div className="nn-cal-head">
                           <button className="nn-cal-btn" onClick={() => { if (cM === 0) { setCM(11); setCY(cY - 1); } else setCM(cM - 1); }}>‹</button>
@@ -1136,9 +1033,7 @@ export function ClientPortal({ email, token }) {
                             <div style={{ color: "var(--red)", fontSize: 13, fontWeight: 300 }}>No available slots on this day. Try another.</div>
                           ) : (
                             <div className="nn-times">
-                              {slots.map(t => (
-                                <button key={t} className={"nn-time" + (editTime === t ? " on" : "")} onClick={() => setEditTime(t)}>{t}</button>
-                              ))}
+                              {slots.map(t => <button key={t} className={"nn-time" + (editTime === t ? " on" : "")} onClick={() => setEditTime(t)}>{t}</button>)}
                             </div>
                           )}
                         </div>
