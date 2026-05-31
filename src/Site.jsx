@@ -273,17 +273,14 @@ function DepositPayment({ prac, clientName, clientEmail, onPaymentReady, onPayme
         A deposit is required to secure your appointment. This will be deducted from your total on the day.
         Free cancellation up to 48 hours before your appointment.
       </div>
-      {loadingStripe ? (
-        <div style={{ fontSize: 13, color: "var(--warm-gray)", fontWeight: 300 }}>Loading payment form...</div>
-      ) : error && !cardElementRef.current?.children.length ? (
-        <div style={{ fontSize: 13, color: "var(--red)", fontWeight: 300 }}>{error}</div>
-      ) : (
-        <>
-          <div ref={cardElementRef}
-            style={{ padding: "13px 16px", border: "1.5px solid var(--border)", background: "var(--cream)", minHeight: 46 }} />
-          {error && <div style={{ fontSize: 12, color: "var(--red)", marginTop: 8, fontWeight: 300 }}>{error}</div>}
-        </>
-      )}
+      {loadingStripe && (
+      <div style={{ fontSize: 13, color: "var(--warm-gray)", fontWeight: 300, marginBottom: 8 }}>Loading payment form...</div>
+    )}
+    <div
+      ref={cardElementRef}
+      style={{ padding: "13px 16px", border: "1.5px solid var(--border)", background: "var(--cream)", minHeight: 46, display: loadingStripe ? "none" : "block" }}
+    />
+    {error && <div style={{ fontSize: 12, color: "var(--red)", marginTop: 8, fontWeight: 300 }}>{error}</div>}
     </div>
   );
 }
