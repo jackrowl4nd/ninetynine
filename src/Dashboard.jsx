@@ -1076,10 +1076,11 @@ export default function Dashboard({ onBack }) {
                     style={{ padding: "5px 8px", border: "1.5px solid var(--border)", background: "var(--warm-white)", fontFamily: "'Outfit',sans-serif", fontSize: 12, outline: "none", color: "var(--charcoal)", cursor: "pointer" }}
                   >
                     <option value="">No break</option>
-                    <option value="15">15 min</option>
                     <option value="30">30 min</option>
                     <option value="45">45 min</option>
                     <option value="60">1 hour</option>
+                    <option value="90">1 hour 30 min</option>
+                    <option value="120">2 hours</option>
                   </select>
                   {row.break_start && row.break_duration && (
                     <span style={{ fontSize: 11, color: "var(--gold)", fontWeight: 300, marginLeft: 4 }}>
