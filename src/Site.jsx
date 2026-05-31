@@ -2,7 +2,7 @@
 // Nav, Hero, Divider, ServicesList, TeamSection, BookingFlow, CancelPage
 
 import React, { useState, useEffect, useRef } from "react";
-import { supabase, IS_DEMO } from "./supabase.js";
+import { supabase, IS_DEMO, SUPABASE_URL } from "./supabase.js";
 import {
   DEMO_SERVICES_LIST,
   TREATMENT_CATEGORIES,
@@ -14,6 +14,24 @@ import {
   useAvailableSlots,
   ServiceGroup,
 } from "./shared.jsx";
+
+// ============================================================
+// STRIPE LOADER
+// ============================================================
+
+let stripePromise = null;
+function loadStripe(publishableKey) {
+  if (!stripePromise) {
+    stripePromise = new Promise((resolve) => {
+      if (window.Stripe) { resolve(window.Stripe(publishableKey)); return; }
+      const script = document.createElement("script");
+      script.src = "https://js.stripe.com/v3/";
+      script.onload = () => resolve(window.Stripe(publishableKey));
+      document.head.appendChild(script);
+    });
+  }
+  return stripePromise;
+}
 
 // ============================================================
 // NAV
@@ -173,6 +191,104 @@ function isValidEmail(email) {
 }
 
 // ============================================================
+// DEPOSIT PAYMENT SECTION
+// ============================================================
+
+function DepositPayment({ prac, clientName, clientEmail, onPaymentReady, onPaymentError }) {
+  const cardElementRef = useRef(null);
+  const [stripe, setStripe] = useState(null);
+  const [elements, setElements] = useState(null);
+  const [cardReady, setCardReady] = useState(false);
+  const [loadingStripe, setLoadingStripe] = useState(true);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    const key = import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY;
+    if (!key) { setError("Payment unavailable — no Stripe key configured."); setLoadingStripe(false); return; }
+    loadStripe(key).then(s => {
+      const els = s.elements();
+      const card = els.create("card", {
+        style: {
+          base: {
+            fontFamily: "'Outfit', sans-serif",
+            fontSize: "15px",
+            color: "#2C2825",
+            "::placeholder": { color: "#B8A08A" },
+          },
+          invalid: { color: "#C46E6E" },
+        },
+      });
+      card.mount(cardElementRef.current);
+      card.on("change", e => {
+        setCardReady(e.complete);
+        setError(e.error ? e.error.message : null);
+        if (e.complete) {
+          // Expose confirm function to parent via callback
+          onPaymentReady(() => confirmPayment(s, card));
+        } else {
+          onPaymentReady(null);
+        }
+      });
+      setStripe(s);
+      setElements(els);
+      setLoadingStripe(false);
+    }).catch(() => {
+      setError("Failed to load payment form. Please refresh and try again.");
+      setLoadingStripe(false);
+    });
+  }, []);
+
+  async function confirmPayment(stripeInstance, cardElement) {
+    // Create PaymentIntent via Edge Function
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/create-payment-intent`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        practitioner_id: prac.id,
+        amount: prac.deposit_amount,
+        client_name: clientName,
+        client_email: clientEmail,
+      }),
+    });
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+
+    // Confirm payment on client side
+    const { error: stripeError, paymentIntent } = await stripeInstance.confirmCardPayment(
+      data.client_secret,
+      { payment_method: { card: cardElement, billing_details: { name: clientName, email: clientEmail } } }
+    );
+    if (stripeError) throw new Error(stripeError.message);
+    return { paymentIntentId: paymentIntent.id, depositAmount: prac.deposit_amount };
+  }
+
+  return (
+    <div style={{ marginTop: 24, padding: "20px 24px", background: "var(--warm-white)", border: "1.5px solid var(--gold)" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+        <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: "2px", textTransform: "uppercase", color: "var(--gold)" }}>
+          £{prac.deposit_amount} Deposit Required
+        </div>
+      </div>
+      <div style={{ fontSize: 13, color: "var(--warm-gray)", fontWeight: 300, lineHeight: 1.6, marginBottom: 16 }}>
+        A deposit is required to secure your appointment. This will be deducted from your total on the day.
+        Free cancellation up to 48 hours before your appointment.
+      </div>
+      {loadingStripe ? (
+        <div style={{ fontSize: 13, color: "var(--warm-gray)", fontWeight: 300 }}>Loading payment form...</div>
+      ) : error && !cardElementRef.current?.children.length ? (
+        <div style={{ fontSize: 13, color: "var(--red)", fontWeight: 300 }}>{error}</div>
+      ) : (
+        <>
+          <div ref={cardElementRef}
+            style={{ padding: "13px 16px", border: "1.5px solid var(--border)", background: "var(--cream)", minHeight: 46 }} />
+          {error && <div style={{ fontSize: 12, color: "var(--red)", marginTop: 8, fontWeight: 300 }}>{error}</div>}
+        </>
+      )}
+    </div>
+  );
+}
+
+// ============================================================
 // BOOKING FLOW
 // ============================================================
 
@@ -191,13 +307,17 @@ function BookingFlow({ practitioners, preselectedPrac, onClearPreselect, drawerM
   const [emailTouched, setEmailTouched] = useState(false);
   const [customServices, setCustomServices] = useState([]);
   const [loadingServices, setLoadingServices] = useState(false);
+  const [confirmPaymentFn, setConfirmPaymentFn] = useState(null);
+  const [paymentError, setPaymentError] = useState(null);
   const now = new Date();
   const [cM, setCM] = useState(now.getMonth());
   const [cY, setCY] = useState(now.getFullYear());
   const labels = ["Practitioner", "Service", "Date & Time", "Confirm"];
 
   const emailValid = isValidEmail(email);
-  const canConfirm = clientName.trim() && phone.trim() && emailValid && !saving;
+  const depositsEnabled = !IS_DEMO && prac?.deposits_enabled && prac?.stripe_account_id;
+  const canConfirm = clientName.trim() && phone.trim() && emailValid && !saving &&
+    (!depositsEnabled || confirmPaymentFn !== null);
 
   useEffect(() => {
     if (preselectedPrac) {
@@ -220,7 +340,6 @@ function BookingFlow({ practitioners, preselectedPrac, onClearPreselect, drawerM
     }).catch(() => setLoadingServices(false));
   }, [prac]);
 
-  // Fetch practitioner's weekly availability so we can grey out days in the calendar
   const [availability, setAvailability] = useState([]);
   useEffect(() => {
     if (!prac) { setAvailability([]); return; }
@@ -233,10 +352,7 @@ function BookingFlow({ practitioners, preselectedPrac, onClearPreselect, drawerM
     }).then(rows => setAvailability(rows)).catch(() => setAvailability([]));
   }, [prac]);
 
-  // Convert schema day numbering (0=Mon) to JS day numbering (0=Sun)
-  const unavailableDays = new Set(availability.map(r => {
-    return r.day_of_week === 6 ? 0 : r.day_of_week + 1;
-  }));
+  const unavailableDays = new Set(availability.map(r => r.day_of_week === 6 ? 0 : r.day_of_week + 1));
 
   const totalDuration = (svc?.duration || 0) + (addon ? addon.duration : 0);
   const totalPrice = (svc?.price || 0) + (addon ? addon.price : 0);
@@ -245,14 +361,11 @@ function BookingFlow({ practitioners, preselectedPrac, onClearPreselect, drawerM
   const confirmStep = svc?.addon ? 5 : 4;
   const totalSteps = svc?.addon ? 5 : 4;
 
-  // Booking window — how many weeks ahead to allow bookings
   const bookingWindowWeeks = prac?.booking_window_weeks || 8;
   const maxDate = new Date();
   maxDate.setDate(maxDate.getDate() + bookingWindowWeeks * 7);
 
-  // Slot counts for traffic light dots
   const [slotCounts, setSlotCounts] = useState({});
-
   useEffect(() => {
     if (!prac || step !== dateStep) { setSlotCounts({}); return; }
     const today = new Date();
@@ -263,8 +376,7 @@ function BookingFlow({ practitioners, preselectedPrac, onClearPreselect, drawerM
       if (dt < new Date(today.getFullYear(), today.getMonth(), today.getDate())) continue;
       if (dt > maxDate) continue;
       if (dt.getDay() === 0) continue;
-      const jsDay = dt.getDay();
-      if (unavailableDays.has(jsDay)) continue;
+      if (unavailableDays.has(dt.getDay())) continue;
       days.push(d);
     }
     Promise.all(
@@ -295,7 +407,26 @@ function BookingFlow({ practitioners, preselectedPrac, onClearPreselect, drawerM
     if (!canConfirm) return;
     if (IS_DEMO) { setDone(true); return; }
     setSaving(true);
+    setPaymentError(null);
     try {
+      let depositPaid = false;
+      let depositAmount = null;
+      let stripePaymentIntentId = null;
+
+      // Process deposit if required
+      if (depositsEnabled && confirmPaymentFn) {
+        try {
+          const result = await confirmPaymentFn();
+          depositPaid = true;
+          depositAmount = result.depositAmount;
+          stripePaymentIntentId = result.paymentIntentId;
+        } catch (e) {
+          setPaymentError(e.message || "Payment failed. Please check your card details and try again.");
+          setSaving(false);
+          return;
+        }
+      }
+
       const serviceTitle = svc.title + (addon ? " + " + addon.title : "");
       await supabase.insert("bookings", {
         practitioner_id: prac.id,
@@ -309,9 +440,15 @@ function BookingFlow({ practitioners, preselectedPrac, onClearPreselect, drawerM
         duration: totalDuration,
         price: totalPrice,
         notes: addon ? "Add-on: " + addon.title : "",
+        deposit_paid: depositPaid,
+        deposit_amount: depositAmount,
+        stripe_payment_intent_id: stripePaymentIntentId,
       });
       setDone(true);
-    } catch (e) { console.error(e); alert("Sorry, there was an error creating your booking. Please try again."); }
+    } catch (e) {
+      console.error(e);
+      alert("Sorry, there was an error creating your booking. Please try again.");
+    }
     setSaving(false);
   }
 
@@ -351,6 +488,11 @@ function BookingFlow({ practitioners, preselectedPrac, onClearPreselect, drawerM
           {clientName}, your appointment with {prac.name} is confirmed for {getDayName(date.year, date.month, date.day)} {date.day} {getMonthName(date.month)} at {time}.<br />
           A confirmation has been sent to {email}. See you at 99 Banks Road!
         </p>
+        {depositsEnabled && (
+          <p style={{ textAlign: "center", color: "var(--warm-gray)", fontSize: 13, fontWeight: 300, lineHeight: 1.6, marginTop: 12 }}>
+            Your £{prac.deposit_amount} deposit has been taken and will be deducted from your total on the day.
+          </p>
+        )}
         {drawerMode && onClose && (
           <div style={{ textAlign: "center", marginTop: 32 }}>
             <button className="nn-btn nn-btn-dark" onClick={onClose}>Close</button>
@@ -516,6 +658,12 @@ function BookingFlow({ practitioners, preselectedPrac, onClearPreselect, drawerM
             <div className="nn-confirm-row"><span className="nn-confirm-label">Time</span><span className="nn-confirm-val">{time}</span></div>
             <div className="nn-confirm-row"><span className="nn-confirm-label">Duration</span><span className="nn-confirm-val">{totalDuration} min</span></div>
             <div className="nn-confirm-row"><span className="nn-confirm-label">Price</span><span className="nn-confirm-val" style={{ color: "var(--gold)", fontWeight: 600 }}>£{totalPrice}</span></div>
+            {depositsEnabled && (
+              <div className="nn-confirm-row">
+                <span className="nn-confirm-label">Deposit due now</span>
+                <span className="nn-confirm-val" style={{ color: "var(--gold)", fontWeight: 600 }}>£{prac.deposit_amount}</span>
+              </div>
+            )}
             <div style={{ marginTop: 24, display: "flex", flexDirection: "column", gap: 14 }}>
               <div>
                 <label className="nn-input-label">Your Name</label>
@@ -548,11 +696,25 @@ function BookingFlow({ practitioners, preselectedPrac, onClearPreselect, drawerM
                 </div>
               </div>
             </div>
+            {depositsEnabled && clientName && emailValid && (
+              <DepositPayment
+                prac={prac}
+                clientName={clientName}
+                clientEmail={email}
+                onPaymentReady={(fn) => setConfirmPaymentFn(() => fn)}
+                onPaymentError={setPaymentError}
+              />
+            )}
+            {paymentError && (
+              <div style={{ marginTop: 12, padding: "12px 16px", background: "rgba(196,110,110,.08)", border: "1px solid rgba(196,110,110,.2)", fontSize: 13, color: "var(--red)", fontWeight: 300 }}>
+                {paymentError}
+              </div>
+            )}
           </div>
           <div className="nn-booking-nav">
             <button className="nn-btn-back" onClick={() => setStep(dateStep)}>Back</button>
             <button className="nn-btn nn-btn-gold" onClick={handleConfirm} disabled={!canConfirm} style={{ opacity: canConfirm ? 1 : .35 }}>
-              {saving ? "Booking..." : "Confirm Booking"}
+              {saving ? (depositsEnabled ? "Processing payment..." : "Booking...") : depositsEnabled ? `Pay £${prac.deposit_amount} & Confirm` : "Confirm Booking"}
             </button>
           </div>
         </div>
@@ -614,6 +776,17 @@ export function CancelPage({ token }) {
                 <span style={{ fontWeight: 500 }}>{val}</span>
               </div>
             ))}
+            {booking.deposit_paid && (
+              <div style={{ padding: "14px 0 0", fontSize: 13, color: "var(--warm-gray)", fontWeight: 300, lineHeight: 1.6 }}>
+                {(() => {
+                  const apptDt = new Date(booking.booking_date + "T" + booking.booking_time);
+                  const hoursUntil = (apptDt - new Date()) / (1000 * 60 * 60);
+                  return hoursUntil >= 48
+                    ? `Your £${booking.deposit_amount} deposit will be refunded automatically.`
+                    : `This appointment is within 48 hours — your £${booking.deposit_amount} deposit is non-refundable.`;
+                })()}
+              </div>
+            )}
           </div>
           <div style={{ display: "flex", gap: 12 }}>
             <a href="/" style={{ flex: 1, padding: "14px", background: "none", border: "1.5px solid var(--border)", fontFamily: "'Outfit',sans-serif", fontSize: 11, fontWeight: 500, letterSpacing: "2px", textTransform: "uppercase", textAlign: "center", textDecoration: "none", color: "var(--charcoal)" }}>Keep Booking</a>
@@ -793,6 +966,9 @@ export function ClientPortal({ email, token }) {
                         {isToday ? "Today" : formattedDate} at {b.booking_time?.slice(0, 5)}
                       </div>
                       <div style={{ fontSize: 12, color: "var(--warm-gray)", fontWeight: 300, marginTop: 2 }}>{b.duration} min · £{b.price}</div>
+                      {b.deposit_paid && (
+                        <div style={{ fontSize: 11, color: "var(--green)", fontWeight: 500, marginTop: 4 }}>£{b.deposit_amount} deposit paid</div>
+                      )}
                     </div>
                     <div style={{ display: "flex", flexDirection: "column", gap: 8, flexShrink: 0 }}>
                       <button onClick={() => isEditing ? cancelEdit() : startEdit(b)}
@@ -953,7 +1129,6 @@ export default function Site({ onDash }) {
         </div>
       </div>
 
-      {/* Desktop inline booking */}
       <section className="nn-section nn-booking nn-booking-inline" id="booking" ref={bookRef} style={{ display: isMobile ? "none" : undefined }}>
         <div style={{ marginBottom: 52 }}>
           <div className="nn-section-label">Book Online</div>
@@ -968,7 +1143,6 @@ export default function Site({ onDash }) {
         />
       </section>
 
-      {/* Mobile booking drawer */}
       <div className={"nn-booking-drawer" + (drawerOpen ? " open" : "")} aria-hidden={!drawerOpen}>
         <div className="nn-booking-drawer-header">
           <div className="nn-booking-drawer-title">Book an appointment</div>
