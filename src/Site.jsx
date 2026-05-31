@@ -225,7 +225,6 @@ function BookingFlow({ practitioners, preselectedPrac, onClearPreselect, drawerM
   useEffect(() => {
     if (!prac) { setAvailability([]); return; }
     if (IS_DEMO) {
-      // Mon–Sat available, Sun off
       setAvailability([0,1,2,3,4,5].map(d => ({ day_of_week: d, is_available: true })));
       return;
     }
@@ -234,11 +233,8 @@ function BookingFlow({ practitioners, preselectedPrac, onClearPreselect, drawerM
     }).then(rows => setAvailability(rows)).catch(() => setAvailability([]));
   }, [prac]);
 
-  // Set of day-of-week numbers (0=Mon…6=Sun) that are unavailable
-  // Note: our schema uses 0=Monday; JS getDay() uses 0=Sunday
-  // We convert: schema day 0=Mon → JS day 1, schema day 6=Sun → JS day 0
+  // Convert schema day numbering (0=Mon) to JS day numbering (0=Sun)
   const unavailableDays = new Set(availability.map(r => {
-    // schema: 0=Mon,1=Tue,...,5=Sat,6=Sun → JS: Mon=1,Tue=2,...,Sat=6,Sun=0
     return r.day_of_week === 6 ? 0 : r.day_of_week + 1;
   }));
 
@@ -249,34 +245,43 @@ function BookingFlow({ practitioners, preselectedPrac, onClearPreselect, drawerM
   const confirmStep = svc?.addon ? 5 : 4;
   const totalSteps = svc?.addon ? 5 : 4;
 
+  // Booking window — how many weeks ahead to allow bookings
+  const bookingWindowWeeks = prac?.booking_window_weeks || 8;
+  const maxDate = new Date();
+  maxDate.setDate(maxDate.getDate() + bookingWindowWeeks * 7);
+
+  // Slot counts for traffic light dots
   const [slotCounts, setSlotCounts] = useState({});
 
-useEffect(() => {
-  if (!prac || step !== dateStep) { setSlotCounts({}); return; }
-  const today = new Date();
-  const total = getDaysInMonth(cY, cM);
-  const days = [];
-  for (let d = 1; d <= total; d++) {
-    const dt = new Date(cY, cM, d);
-    if (dt < new Date(today.getFullYear(), today.getMonth(), today.getDate())) continue;
-    if (dt.getDay() === 0) continue;
-    days.push(d);
-  }
-  Promise.all(
-    days.map(d =>
-      supabase.rpc("get_available_slots", {
-        p_practitioner_id: prac.id,
-        p_date: dateStr(cY, cM, d),
-        p_duration: totalDuration || 30,
-        p_interval: prac.slot_interval || 30,
-      }).then(rows => ({ d, count: rows.length })).catch(() => ({ d, count: 0 }))
-    )
-  ).then(results => {
-    const map = {};
-    results.forEach(({ d, count }) => { map[dateStr(cY, cM, d)] = count; });
-    setSlotCounts(map);
-  });
-}, [prac, cM, cY, step, totalDuration]);
+  useEffect(() => {
+    if (!prac || step !== dateStep) { setSlotCounts({}); return; }
+    const today = new Date();
+    const total = getDaysInMonth(cY, cM);
+    const days = [];
+    for (let d = 1; d <= total; d++) {
+      const dt = new Date(cY, cM, d);
+      if (dt < new Date(today.getFullYear(), today.getMonth(), today.getDate())) continue;
+      if (dt > maxDate) continue;
+      if (dt.getDay() === 0) continue;
+      const jsDay = dt.getDay();
+      if (unavailableDays.has(jsDay)) continue;
+      days.push(d);
+    }
+    Promise.all(
+      days.map(d =>
+        supabase.rpc("get_available_slots", {
+          p_practitioner_id: prac.id,
+          p_date: dateStr(cY, cM, d),
+          p_duration: totalDuration || 30,
+          p_interval: prac.slot_interval || 30,
+        }).then(rows => ({ d, count: rows.length })).catch(() => ({ d, count: 0 }))
+      )
+    ).then(results => {
+      const map = {};
+      results.forEach(({ d, count }) => { map[dateStr(cY, cM, d)] = count; });
+      setSlotCounts(map);
+    });
+  }, [prac, cM, cY, step, totalDuration]);
 
   const groups = [...new Set(customServices.filter(s => s.group_name).map(s => s.group_name))];
   const ungrouped = customServices.filter(s => !s.group_name);
@@ -374,7 +379,6 @@ useEffect(() => {
               </div>
             ))}
           </div>
-
         </div>
       )}
 
@@ -435,8 +439,13 @@ useEffect(() => {
               <div className="nn-cal-head">
                 <button className="nn-cal-btn" onClick={() => { if (cM === 0) { setCM(11); setCY(cY - 1); } else setCM(cM - 1); }}>‹</button>
                 <h3>{getMonthName(cM)} {cY}</h3>
-                <button className="nn-cal-btn" onClick={() => { if(cM===11){setCM(0);setCY(cY+1)}else setCM(cM+1) }}
-  disabled={(() => { const max = new Date(); max.setDate(1); max.setMonth(max.getMonth() + (prac?.booking_window_weeks ? Math.floor(prac.booking_window_weeks * 7 / 30) : 8)); return new Date(cY, cM, 1) >= max; })()}>›</button>
+                <button className="nn-cal-btn" onClick={() => { if (cM === 11) { setCM(0); setCY(cY + 1); } else setCM(cM + 1); }}
+                  disabled={(() => {
+                    const max = new Date();
+                    max.setDate(1);
+                    max.setMonth(max.getMonth() + Math.ceil(bookingWindowWeeks * 7 / 30));
+                    return new Date(cY, cM, 1) >= max;
+                  })()}>›</button>
               </div>
               <div className="nn-cal-weekdays">{["Mon","Tue","Wed","Thu","Fri","Sat","Sun"].map(d => <span key={d}>{d}</span>)}</div>
               <div className="nn-cal-days">
@@ -446,20 +455,29 @@ useEffect(() => {
                   const cells = [];
                   for (let i = 0; i < first; i++) cells.push(<div className="nn-cal-day nil" key={"e" + i} />);
                   for (let d = 1; d <= total; d++) {
+                    const dt = new Date(cY, cM, d);
                     const isNow = d === now.getDate() && cM === now.getMonth() && cY === now.getFullYear();
-                    const past = new Date(cY, cM, d) < new Date(now.getFullYear(), now.getMonth(), now.getDate());
-                    const jsDay = new Date(cY, cM, d).getDay();
+                    const past = dt < new Date(now.getFullYear(), now.getMonth(), now.getDate());
+                    const beyondWindow = dt > maxDate;
+                    const jsDay = dt.getDay();
                     const unavail = unavailableDays.has(jsDay);
                     const sel = date && date.day === d && date.month === cM && date.year === cY;
                     const ds = dateStr(cY, cM, d);
-const count = slotCounts[ds];
-const dotColor = past || new Date(cY, cM, d).getDay() === 0 || unavail ? null : count === undefined ? null : count === 0 ? "var(--red)" : count <= 3 ? "#C9963E" : "var(--green)";cells.push(
-  <button key={d} className={"nn-cal-day"+(sel?" on":"")+(past||new Date(cY,cM,d).getDay()===0||unavail?" off":"")+(isNow?" now":"")}
-  onClick={() => { if(!past&&new Date(cY,cM,d).getDay()!==0&&!unavail){ setDate({day:d,month:cM,year:cY}); setTime(null); }}} disabled={past||new Date(cY,cM,d).getDay()===0||unavail}>
-    {d}
-    {dotColor && <span style={{ display:"block", width:5, height:5, borderRadius:"50%", background:dotColor, margin:"2px auto 0" }}/>}
-  </button>
-);
+                    const count = slotCounts[ds];
+                    const dotColor = past || beyondWindow || jsDay === 0 || unavail ? null
+                      : count === undefined ? null
+                      : count === 0 ? "var(--red)"
+                      : count <= 3 ? "#C9963E"
+                      : "var(--green)";
+                    cells.push(
+                      <button key={d}
+                        className={"nn-cal-day" + (sel ? " on" : "") + (past || beyondWindow || jsDay === 0 || unavail ? " off" : "") + (isNow ? " now" : "")}
+                        onClick={() => { if (!past && !beyondWindow && jsDay !== 0 && !unavail) { setDate({ day: d, month: cM, year: cY }); setTime(null); } }}
+                        disabled={past || beyondWindow || jsDay === 0 || unavail}>
+                        {d}
+                        {dotColor && <span style={{ display: "block", width: 5, height: 5, borderRadius: "50%", background: dotColor, margin: "2px auto 0" }} />}
+                      </button>
+                    );
                   }
                   return cells;
                 })()}
@@ -533,12 +551,7 @@ const dotColor = past || new Date(cY, cM, d).getDay() === 0 || unavail ? null : 
           </div>
           <div className="nn-booking-nav">
             <button className="nn-btn-back" onClick={() => setStep(dateStep)}>Back</button>
-            <button
-              className="nn-btn nn-btn-gold"
-              onClick={handleConfirm}
-              disabled={!canConfirm}
-              style={{ opacity: canConfirm ? 1 : .35 }}
-            >
+            <button className="nn-btn nn-btn-gold" onClick={handleConfirm} disabled={!canConfirm} style={{ opacity: canConfirm ? 1 : .35 }}>
               {saving ? "Booking..." : "Confirm Booking"}
             </button>
           </div>
@@ -628,14 +641,12 @@ export function CancelPage({ token }) {
 
 // ============================================================
 // CLIENT PORTAL — /my-bookings?email=xxx&token=yyy
-// Shown when a client clicks "View my bookings" from their email.
-// Token is a simple HMAC-style hash of the email — no password needed.
 // ============================================================
 
 export function ClientPortal({ email, token }) {
   const [status, setStatus] = useState("loading");
   const [bookings, setBookings] = useState([]);
-  const [editingBooking, setEditingBooking] = useState(null); // booking being rescheduled
+  const [editingBooking, setEditingBooking] = useState(null);
   const [cancellingId, setCancellingId] = useState(null);
   const now = new Date();
   const [cM, setCM] = useState(now.getMonth());
@@ -718,8 +729,6 @@ export function ClientPortal({ email, token }) {
   return (
     <div style={{ minHeight: "100vh", background: "var(--cream)", padding: "40px 24px" }}>
       <div style={{ maxWidth: 520, margin: "0 auto" }}>
-
-        {/* Header */}
         <div style={{ textAlign: "center", marginBottom: 48 }}>
           <img src="/logo-dark.png" alt="ninety nine." style={{ height: 28, marginBottom: 20 }} />
           <div style={{ width: 36, height: 1.5, background: "var(--gold)", margin: "0 auto 24px" }} />
@@ -730,7 +739,6 @@ export function ClientPortal({ email, token }) {
         {status === "loading" && (
           <div style={{ textAlign: "center", color: "var(--warm-gray)", fontSize: 14, fontWeight: 300 }}>Loading your bookings...</div>
         )}
-
         {status === "invalid" && (
           <div style={{ textAlign: "center" }}>
             <div style={{ fontFamily: "'Cormorant Garamond',serif", fontSize: 24, fontWeight: 300, marginBottom: 12 }}>Link not valid</div>
@@ -740,7 +748,6 @@ export function ClientPortal({ email, token }) {
             </p>
           </div>
         )}
-
         {status === "error" && (
           <div style={{ textAlign: "center" }}>
             <div style={{ fontFamily: "'Cormorant Garamond',serif", fontSize: 24, fontWeight: 300, marginBottom: 12 }}>Something went wrong</div>
@@ -749,7 +756,6 @@ export function ClientPortal({ email, token }) {
             </p>
           </div>
         )}
-
         {status === "ready" && bookings.length === 0 && (
           <div style={{ textAlign: "center", padding: "32px 0" }}>
             <div style={{ fontFamily: "'Cormorant Garamond',serif", fontSize: 24, fontWeight: 300, marginBottom: 12 }}>No upcoming bookings</div>
@@ -767,7 +773,6 @@ export function ClientPortal({ email, token }) {
             <div style={{ fontSize: 11, fontWeight: 500, letterSpacing: "2.5px", textTransform: "uppercase", color: "var(--warm-gray)", marginBottom: 16 }}>
               {bookings.length} upcoming appointment{bookings.length !== 1 ? "s" : ""}
             </div>
-
             {bookings.map(b => {
               const dateObj = new Date(b.booking_date + "T12:00:00");
               const formattedDate = dateObj.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
@@ -778,47 +783,33 @@ export function ClientPortal({ email, token }) {
               return (
                 <div key={b.id} style={{ background: "var(--warm-white)", border: "1px solid var(--border)", marginBottom: 12, position: "relative", overflow: "hidden" }}>
                   {isToday && <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 2, background: "var(--gold)" }} />}
-
-                  {/* Booking summary row */}
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, padding: "20px" }}>
                     <div style={{ flex: 1 }}>
                       <div style={{ fontFamily: "'Cormorant Garamond',serif", fontSize: 20, fontWeight: 400, marginBottom: 4 }}>
                         {b.service_title || "Appointment"}
                       </div>
-                      <div style={{ fontSize: 13, color: "var(--warm-gray)", fontWeight: 300, marginBottom: 2 }}>
-                        with {b.practitioner?.name}
-                      </div>
+                      <div style={{ fontSize: 13, color: "var(--warm-gray)", fontWeight: 300, marginBottom: 2 }}>with {b.practitioner?.name}</div>
                       <div style={{ fontSize: 13, fontWeight: 500, marginTop: 8, color: isToday ? "var(--gold)" : "var(--charcoal)" }}>
                         {isToday ? "Today" : formattedDate} at {b.booking_time?.slice(0, 5)}
                       </div>
-                      <div style={{ fontSize: 12, color: "var(--warm-gray)", fontWeight: 300, marginTop: 2 }}>
-                        {b.duration} min · £{b.price}
-                      </div>
+                      <div style={{ fontSize: 12, color: "var(--warm-gray)", fontWeight: 300, marginTop: 2 }}>{b.duration} min · £{b.price}</div>
                     </div>
-                    {/* Action buttons */}
                     <div style={{ display: "flex", flexDirection: "column", gap: 8, flexShrink: 0 }}>
-                      <button
-                        onClick={() => isEditing ? cancelEdit() : startEdit(b)}
+                      <button onClick={() => isEditing ? cancelEdit() : startEdit(b)}
                         style={{ padding: "8px 16px", background: isEditing ? "var(--charcoal)" : "none", color: isEditing ? "var(--cream)" : "var(--charcoal)", border: "1px solid " + (isEditing ? "var(--charcoal)" : "var(--border)"), cursor: "pointer", fontSize: 11, fontWeight: 600, letterSpacing: 0.5, textTransform: "uppercase", fontFamily: "'Outfit',sans-serif" }}>
                         {isEditing ? "Close" : "Edit"}
                       </button>
-                      <button
-                        onClick={() => handleCancel(b)}
-                        disabled={isCancelling || isEditing}
+                      <button onClick={() => handleCancel(b)} disabled={isCancelling || isEditing}
                         style={{ padding: "8px 16px", background: "none", color: "var(--red)", border: "1px solid var(--red)", cursor: "pointer", fontSize: 11, fontWeight: 600, letterSpacing: 0.5, textTransform: "uppercase", fontFamily: "'Outfit',sans-serif", opacity: isCancelling || isEditing ? 0.4 : 1 }}>
                         {isCancelling ? "..." : "Cancel"}
                       </button>
                     </div>
                   </div>
-
-                  {/* Inline edit panel */}
                   {isEditing && (
                     <div style={{ borderTop: "1px solid var(--border)", padding: "20px", background: "var(--cream)" }}>
                       <div style={{ fontSize: 12, fontWeight: 500, letterSpacing: "1.5px", textTransform: "uppercase", color: "var(--warm-gray)", marginBottom: 16 }}>
                         Choose a new date &amp; time
                       </div>
-
-                      {/* Calendar */}
                       <div className="nn-cal" style={{ maxWidth: "100%", marginBottom: 16 }}>
                         <div className="nn-cal-head">
                           <button className="nn-cal-btn" onClick={() => { if (cM === 0) { setCM(11); setCY(cY - 1); } else setCM(cM - 1); }}>‹</button>
@@ -849,8 +840,6 @@ export function ClientPortal({ email, token }) {
                           })()}
                         </div>
                       </div>
-
-                      {/* Time slots */}
                       {editDate && (
                         <div style={{ marginBottom: 16 }}>
                           <div style={{ fontSize: 12, color: "var(--warm-gray)", marginBottom: 10, fontWeight: 300 }}>
@@ -869,10 +858,7 @@ export function ClientPortal({ email, token }) {
                           )}
                         </div>
                       )}
-
-                      <button
-                        onClick={handleReschedule}
-                        disabled={!editDate || !editTime || rescheduling}
+                      <button onClick={handleReschedule} disabled={!editDate || !editTime || rescheduling}
                         style={{ width: "100%", padding: "13px", background: "var(--charcoal)", color: "var(--cream)", border: "none", cursor: "pointer", fontFamily: "'Outfit',sans-serif", fontSize: 11, fontWeight: 600, letterSpacing: "2px", textTransform: "uppercase", opacity: editDate && editTime && !rescheduling ? 1 : 0.35 }}>
                         {rescheduling ? "Saving..." : "Confirm New Time"}
                       </button>
@@ -881,7 +867,6 @@ export function ClientPortal({ email, token }) {
                 </div>
               );
             })}
-
             <div style={{ marginTop: 32, textAlign: "center" }}>
               <a href="/" style={{ display: "inline-block", padding: "14px 36px", background: "var(--charcoal)", color: "var(--cream)", textDecoration: "none", fontFamily: "'Outfit',sans-serif", fontSize: 11, fontWeight: 500, letterSpacing: "2px", textTransform: "uppercase" }}>
                 Book Another Appointment
