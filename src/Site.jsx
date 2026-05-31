@@ -231,8 +231,11 @@ function DepositPayment({ prac, clientName, clientEmail, onPaymentReady }) {
 
   async function confirmCardPayment(stripeInstance, cardElement) {
     const res = await fetch(`${SUPABASE_URL}/functions/v1/create-payment-intent`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json",
+    "Authorization": `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+  },
       body: JSON.stringify({
         practitioner_id: prac.id,
         amount: prac.deposit_amount,
