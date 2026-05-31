@@ -281,16 +281,17 @@ function DepositPayment({ prac, clientName, clientEmail, onPaymentReady, onPayme
           if (!cardElementRef.current) return;
           const els = s.elements();
           const card = els.create("card", {
-            style: {
-              base: {
-                fontFamily: "'Outfit', sans-serif",
-                fontSize: "15px",
-                color: "#2C2825",
-                "::placeholder": { color: "#B8A08A" },
-              },
-              invalid: { color: "#C46E6E" },
-            },
-          });
+  hidePostalCode: true,
+  style: {
+    base: {
+      fontFamily: "'Outfit', sans-serif",
+      fontSize: "15px",
+      color: "#2C2825",
+      "::placeholder": { color: "#B8A08A" },
+    },
+    invalid: { color: "#C46E6E" },
+  },
+});
           card.mount(cardElementRef.current);
           card.on("change", ev => {
             setError(ev.error ? ev.error.message : null);
